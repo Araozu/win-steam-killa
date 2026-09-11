@@ -8,6 +8,25 @@ Write-Host "Publishing..."
 & dotnet publish "$Src\Service\Service.csproj" -c Release -r win-x64 --self-contained false -o "$Src\publish\Service" | Out-Null
 & dotnet publish "$Src\App\App.csproj" -c Release -r win-x64 --self-contained false -o "$Src\publish\App" | Out-Null
 
+Write-Host "Stopping old version (service holds its files while running)..."
+sc.exe stop SteamTimer 2>$null | Out-Null
+# Tray app also runs from Program Files, so close it before overwriting.
+Get-Process -Name App -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -like "$Dest*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+# Wait until Service.exe really exits (max ~20s), then force-kill leftovers.
+$deadline = (Get-Date).AddSeconds(20)
+while ((Get-Date) -lt $deadline) {
+    $p = Get-Process -Name Service -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -like "$Dest*" }
+    if (-not $p) { break }
+    Start-Sleep -Milliseconds 500
+}
+Get-Process -Name Service -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -like "$Dest*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 1
+sc.exe delete SteamTimer 2>$null | Out-Null
+Start-Sleep -Seconds 2
+
 Write-Host "Copying to $Dest ..."
 New-Item -ItemType Directory -Path $Dest -Force | Out-Null
 Copy-Item "$Src\publish\Service\*" "$Dest\" -Recurse -Force
@@ -15,9 +34,6 @@ New-Item -ItemType Directory -Path "$Dest\App" -Force | Out-Null
 Copy-Item "$Src\publish\App\*" "$Dest\App\" -Recurse -Force
 
 Write-Host "Creating service..."
-sc.exe stop SteamTimer 2>$null | Out-Null
-sc.exe delete SteamTimer 2>$null | Out-Null
-Start-Sleep -Seconds 2
 sc.exe create SteamTimer binPath= "`"$Dest\Service.exe`"" start= auto obj= LocalSystem | Out-Null
 sc.exe description SteamTimer "Enforces daily Steam time limit; resets at 03:00." | Out-Null
 # Restart on crash: 3 retries, 60s delay, reset counter daily
