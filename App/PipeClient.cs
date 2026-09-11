@@ -13,21 +13,24 @@ public static class PipeClient
         try
         {
             using var client = new NamedPipeClientStream(".", Limits.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-            await client.ConnectAsync(timeoutMs);
+            await client.ConnectAsync(timeoutMs).ConfigureAwait(false);
             using var writer = new StreamWriter(client, leaveOpen: true) { AutoFlush = true };
             using var reader = new StreamReader(client, leaveOpen: true);
-            await writer.WriteLineAsync(JsonSerializer.Serialize(req));
+            await writer.WriteLineAsync(JsonSerializer.Serialize(req)).ConfigureAwait(false);
             // Read with timeout
             var readTask = reader.ReadLineAsync();
-            var done = await Task.WhenAny(readTask, Task.Delay(timeoutMs));
+            var done = await Task.WhenAny(readTask, Task.Delay(timeoutMs)).ConfigureAwait(false);
             if (done != readTask) return null;
-            string? line = await readTask;
+            string? line = await readTask.ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(line)) return null;
             return JsonSerializer.Deserialize<PipeResponse>(line, Opts);
         }
         catch { return null; }
     }
 
+    // Never block a caller's SynchronizationContext (e.g. the WinForms UI
+    // thread): hop to the pool first. Blocking GetResult on an async method
+    // that captures the UI context is what froze the app on Start.
     public static PipeResponse? Send(PipeRequest req, int timeoutMs = 3000) =>
-        SendAsync(req, timeoutMs).GetAwaiter().GetResult();
+        Task.Run(() => SendAsync(req, timeoutMs)).GetAwaiter().GetResult();
 }

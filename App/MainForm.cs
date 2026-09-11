@@ -48,26 +48,36 @@ public class MainForm : Form
         sync.Start();
     }
 
-    private void OnStart(object? sender, EventArgs e)
+    private async void OnStart(object? sender, EventArgs e)
     {
         if (!DurationParser.TryParse(_input.Text, out var d, out var err))
         {
             MessageBox.Show(err, "Steam Timer", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
-        var resp = PipeClient.Send(new PipeRequest { Cmd = "start", Seconds = (int)d.TotalSeconds });
-        if (resp == null)
+        _start.Enabled = false;
+        _start.Text = "Starting...";
+        try
         {
-            MessageBox.Show("Service not reachable. Is SteamTimer installed and running?\nRun Setup/install.ps1 as Administrator.",
-                "Steam Timer", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            return;
+            var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "start", Seconds = (int)d.TotalSeconds });
+            if (resp == null)
+            {
+                MessageBox.Show("Service not reachable. Is SteamTimer installed and running?\nRun Setup/install.ps1 as Administrator.",
+                    "Steam Timer", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            if (!resp.Ok)
+            {
+                MessageBox.Show(resp.Error, "Steam Timer", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            await SyncFromServiceAsync();
         }
-        if (!resp.Ok)
+        finally
         {
-            MessageBox.Show(resp.Error, "Steam Timer", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
+            _start.Text = "Start timer";
+            _start.Enabled = !_hasTimer;
         }
-        _ = SyncFromServiceAsync();
     }
 
     private async Task SyncFromServiceAsync()
