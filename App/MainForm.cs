@@ -11,8 +11,6 @@ public class MainForm : Form
     private DateTime _deadlineUtc;
     private bool _hasTimer;
     private bool _enforcing;
-    private bool _warned;
-    private bool _killTold;
 
     public MainForm()
     {
@@ -84,6 +82,13 @@ public class MainForm : Form
     {
         var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "status" });
         if (resp == null || !resp.Ok) return;
+        UpdateFromStatus(resp);
+    }
+
+    // Called by the tray poll too, so the window stays correct when hidden.
+    // Display only — balloons are owned by TrayContext.
+    public void UpdateFromStatus(PipeResponse resp)
+    {
         if (!resp.HasTimer)
         {
             _hasTimer = false;
@@ -101,6 +106,18 @@ public class MainForm : Form
         RefreshCountdown();
     }
 
+    // X hides to tray instead of closing, so countdown + status keep working.
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        if (e.CloseReason == CloseReason.UserClosing)
+        {
+            e.Cancel = true;
+            Hide();
+            return;
+        }
+        base.OnFormClosing(e);
+    }
+
     private void RefreshCountdown()
     {
         if (!_hasTimer) return;
@@ -109,21 +126,11 @@ public class MainForm : Form
         {
             _status.Text = $"Time left: {(int)left.TotalHours}h {left.Minutes:00}m {left.Seconds:00}s\nDeadline at {_deadlineUtc.ToLocalTime():HH:mm}. Max 3h, one per day.";
             TrayContext.Instance?.SetState($"Steam: {(int)left.TotalHours}h {left.Minutes:00}m left", left);
-            if (left <= Limits.WarnBefore && !_warned)
-            {
-                _warned = true;
-                TrayContext.Instance?.Balloon("Steam closes in 15 minutes", "Save your game.");
-            }
         }
         else
         {
             _status.Text = "Time is up. Steam is blocked until 03:00.\nClose this window if you like — the service keeps enforcing.";
             TrayContext.Instance?.SetState("Steam blocked until 03:00", TimeSpan.Zero);
-            if (!_killTold)
-            {
-                _killTold = true;
-                TrayContext.Instance?.Balloon("Steam time is up", "Closed Steam. Blocked until 03:00.");
-            }
         }
     }
 }

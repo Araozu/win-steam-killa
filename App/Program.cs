@@ -14,8 +14,7 @@ static class Program
             return;
         }
         var tray = new TrayContext();
-        var form = new MainForm();
-        form.Show();
+        tray.ShowMain();
         Application.Run(tray);
     }
 }
