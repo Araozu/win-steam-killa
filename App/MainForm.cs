@@ -4,13 +4,13 @@ namespace App;
 
 public class MainForm : Form
 {
-    private readonly TextBox _input = new() { Width = 140, PlaceholderText = "e.g. 1h30m" };
-    private readonly Button _start = new() { Text = "Start timer", AutoSize = true };
+    private readonly TextBox _input = new() { Width = 140, PlaceholderText = "e.g. 30m (session cap)" };
+    private readonly Button _start = new() { Text = "Cap this session", AutoSize = true };
     private readonly Label _status = new() { AutoSize = true, MaximumSize = new Size(340, 0) };
+    private readonly FlowLayoutPanel _presets = new() { Dock = DockStyle.Top, Height = 40, Padding = new Padding(10) };
     private readonly System.Windows.Forms.Timer _uiTimer = new() { Interval = 1000 };
-    private DateTime _deadlineUtc;
-    private bool _hasTimer;
-    private bool _enforcing;
+    private PipeResponse? _last;
+    private DateTime _lastPollLocal = DateTime.Now;
 
     public MainForm()
     {
@@ -19,15 +19,8 @@ public class MainForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(380, 220);
+        ClientSize = new Size(380, 260);
 
-        var presets = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, Padding = new Padding(10) };
-        foreach (var p in new[] { "1h", "1h30m", "2h", "3h" })
-        {
-            var b = new Button { Text = p, AutoSize = true };
-            b.Click += (_, _) => { _input.Text = p; };
-            presets.Controls.Add(b);
-        }
         var mid = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, Padding = new Padding(10) };
         mid.Controls.Add(_input);
         mid.Controls.Add(_start);
@@ -35,7 +28,7 @@ public class MainForm : Form
         _status.Dock = DockStyle.Fill;
         Controls.Add(_status);
         Controls.Add(mid);
-        Controls.Add(presets);
+        Controls.Add(_presets);
 
         _start.Click += OnStart;
         _uiTimer.Tick += (_, _) => RefreshCountdown();
@@ -44,6 +37,25 @@ public class MainForm : Form
         var sync = new System.Windows.Forms.Timer { Interval = 15000 };
         sync.Tick += async (_, _) => await SyncFromServiceAsync();
         sync.Start();
+    }
+
+    private static string[] PresetsFor(int budgetSec) =>
+        budgetSec <= 5400 ? ["30m", "1h", "1h30m"]
+        : budgetSec <= 9000 ? ["30m", "1h", "1h30m", "2h30m"]
+        : ["1h", "1h30m", "2h", "3h"];
+
+    private void RebuildPresets(int budgetSec)
+    {
+        var want = PresetsFor(budgetSec);
+        var have = _presets.Controls.OfType<Button>().Select(b => b.Text).ToArray();
+        if (have.SequenceEqual(want)) return;
+        _presets.Controls.Clear();
+        foreach (var p in want)
+        {
+            var b = new Button { Text = p, AutoSize = true };
+            b.Click += (_, _) => { _input.Text = p; };
+            _presets.Controls.Add(b);
+        }
     }
 
     private async void OnStart(object? sender, EventArgs e)
@@ -73,8 +85,8 @@ public class MainForm : Form
         }
         finally
         {
-            _start.Text = "Start timer";
-            _start.Enabled = !_hasTimer;
+            _start.Text = "Cap this session";
+            _start.Enabled = _last == null || !_last.Enforcing;
         }
     }
 
@@ -85,24 +97,21 @@ public class MainForm : Form
         UpdateFromStatus(resp);
     }
 
+    private static string Hm(double totalSeconds)
+    {
+        var t = TimeSpan.FromSeconds(Math.Max(0, totalSeconds));
+        return $"{(int)t.TotalHours}h {t.Minutes:00}m";
+    }
+
     // Called by the tray poll too, so the window stays correct when hidden.
     // Display only — balloons are owned by TrayContext.
     public void UpdateFromStatus(PipeResponse resp)
     {
-        if (!resp.HasTimer)
-        {
-            _hasTimer = false;
-            _status.Text = "No timer today.\nPick 1h / 1h30m / 2h (max 3h). One timer per day until 03:00.";
-            _start.Enabled = true;
-            _input.Enabled = true;
-            TrayContext.Instance?.SetState("No timer today — open Steam Timer to start one?", null);
-            return;
-        }
-        _hasTimer = true;
-        _deadlineUtc = resp.DeadlineUtc;
-        _enforcing = resp.Enforcing;
-        _start.Enabled = false;
-        _input.Enabled = false;
+        _last = resp;
+        _lastPollLocal = DateTime.Now;
+        RebuildPresets(resp.BudgetSeconds > 0 ? resp.BudgetSeconds : 5400);
+        _start.Enabled = !resp.Enforcing;
+        _input.Enabled = !resp.Enforcing;
         RefreshCountdown();
     }
 
@@ -120,17 +129,28 @@ public class MainForm : Form
 
     private void RefreshCountdown()
     {
-        if (!_hasTimer) return;
-        var left = _deadlineUtc - DateTime.UtcNow;
-        if (left > TimeSpan.Zero)
+        if (_last == null) return;
+        var r = _last;
+        // Estimate live remaining between 15s polls while a session runs.
+        double elapsed = (DateTime.Now - _lastPollLocal).TotalSeconds;
+        double remaining = r.RemainingSeconds;
+        if (r.Running && remaining > 0) remaining = Math.Max(0, remaining - elapsed);
+        double sessRem = r.SessionCapSeconds > 0 ? r.SessionRemainingSeconds : double.PositiveInfinity;
+        if (r.Running && r.SessionCapSeconds > 0) sessRem = Math.Max(0, sessRem - elapsed);
+
+        if (r.Enforcing || remaining <= 0)
         {
-            _status.Text = $"Time left: {(int)left.TotalHours}h {left.Minutes:00}m {left.Seconds:00}s\nDeadline at {_deadlineUtc.ToLocalTime():HH:mm}. Max 3h, one per day.";
-            TrayContext.Instance?.SetState($"Steam: {(int)left.TotalHours}h {left.Minutes:00}m left", left);
-        }
-        else
-        {
-            _status.Text = "Time is up. Steam is blocked until 03:00.\nClose this window if you like — the service keeps enforcing.";
+            _status.Text = $"Budget used up ({Hm(r.BudgetSeconds)} today). Back after 03:00.\nSteam is blocked until then — the service keeps enforcing.";
             TrayContext.Instance?.SetState("Steam blocked until 03:00", TimeSpan.Zero);
+            return;
         }
+        string state = r.Running ? "Playing — counting down" : "Paused — Steam closed, timer stopped";
+        string cap = r.SessionCapSeconds > 0
+            ? $"\nThis session ends in {Hm(sessRem)} (cap {Hm(r.SessionCapSeconds)})."
+            : "\nNo session cap — launch Steam and it tracks itself. Type e.g. 30m to cap this session.";
+        _status.Text = $"{state}.\nLeft today: {Hm(remaining)} of {Hm(r.BudgetSeconds)} (used {Hm(r.UsedSeconds)}).{cap}";
+        var left = TimeSpan.FromSeconds(remaining);
+        TrayContext.Instance?.SetState(
+            r.Running ? $"Steam: {Hm(remaining)} left today" : $"Paused: {Hm(remaining)} left today", left);
     }
 }

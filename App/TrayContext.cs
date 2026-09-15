@@ -11,9 +11,11 @@ public class TrayContext : ApplicationContext
     private readonly System.Windows.Forms.Timer _poll = new() { Interval = 15000 };
     private MainForm? _form;
     private bool _polling;
-    private string? _seenTimerKey;
+    private string? _seenDay;
     private bool _warned;
     private bool _enforceTold;
+    private string? _seenCapKey;
+    private bool _capWarned;
 
     public TrayContext()
     {
@@ -51,6 +53,12 @@ public class TrayContext : ApplicationContext
         _form.Activate();
     }
 
+    private static string Hm(double totalSeconds)
+    {
+        var t = TimeSpan.FromSeconds(Math.Max(0, totalSeconds));
+        return $"{(int)t.TotalHours}h {t.Minutes:00}m";
+    }
+
     private async Task PollAsync()
     {
         if (_polling) return;
@@ -60,40 +68,44 @@ public class TrayContext : ApplicationContext
             var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "status" });
             if (resp == null || !resp.Ok) return;
             _form?.UpdateFromStatus(resp);
-            if (!resp.HasTimer)
+            if (resp.LogicalDay != _seenDay)
             {
-                _seenTimerKey = null;
+                _seenDay = resp.LogicalDay;
                 _warned = false;
                 _enforceTold = false;
-                SetState("No timer today — open Steam Timer to start one?", null);
-                return;
+                _seenCapKey = null;
+                _capWarned = false;
             }
-            var key = resp.LogicalDay + "|" + resp.DeadlineUtc.Ticks;
-            if (key != _seenTimerKey)
-            {
-                _seenTimerKey = key;
-                _warned = false;
-                _enforceTold = false;
-            }
-            var left = resp.DeadlineUtc - DateTime.UtcNow;
-            if (left > TimeSpan.Zero)
-            {
-                SetState($"Steam: {(int)left.TotalHours}h {left.Minutes:00}m left", left);
-                if (left <= Limits.WarnBefore && !_warned)
-                {
-                    _warned = true;
-                    Balloon("Steam closes in 15 minutes", "Save your game.");
-                }
-            }
-            else
+            if (resp.Enforcing || resp.RemainingSeconds <= 0)
             {
                 SetState("Steam blocked until 03:00", TimeSpan.Zero);
                 if (!_enforceTold)
                 {
                     _enforceTold = true;
-                    Balloon("Steam time is up", "Closed Steam. Blocked until 03:00.");
+                    Balloon("Steam time is up", "Daily budget used. Blocked until 03:00.");
+                }
+                return;
+            }
+            var left = TimeSpan.FromSeconds(resp.RemainingSeconds);
+            SetState(resp.Running ? $"Steam: {Hm(resp.RemainingSeconds)} left" : $"Paused: {Hm(resp.RemainingSeconds)} left", left);
+            if (resp.RemainingSeconds <= Limits.WarnBefore.TotalSeconds && !_warned)
+            {
+                _warned = true;
+                Balloon("Steam closes in 15 minutes", $"{Hm(resp.RemainingSeconds)} of today's budget left. Save your game.");
+            }
+            // Session-cap warning: only when the cap is tighter than the budget.
+            if (resp.SessionCapSeconds > 0 && resp.SessionRemainingSeconds < resp.RemainingSeconds &&
+                resp.SessionRemainingSeconds <= Limits.WarnBefore.TotalSeconds && resp.SessionRemainingSeconds > 0)
+            {
+                var key = resp.LogicalDay + "|" + resp.SessionCapSeconds + "|" + resp.StartUtc.Ticks;
+                if (key != _seenCapKey) { _seenCapKey = key; _capWarned = false; }
+                if (!_capWarned)
+                {
+                    _capWarned = true;
+                    Balloon("Session cap ending", $"This session ends in {Hm(resp.SessionRemainingSeconds)}. Close Steam to pause the budget.");
                 }
             }
+            else { _seenCapKey = null; _capWarned = false; }
         }
         finally { _polling = false; }
     }

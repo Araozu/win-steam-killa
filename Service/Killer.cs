@@ -10,10 +10,19 @@ public static class Killer
     public static readonly string[] SteamNames =
         ["steam", "steamwebhelper", "gameoverlayui", "steamservice"];
 
+    // Detection excludes steamservice: it can linger as a Windows service even
+    // when the client is closed, which would make auto-start never pause.
+    public static readonly string[] ClientNames =
+        ["steam", "steamwebhelper", "gameoverlayui"];
+
     public static bool IsSteamName(string processName) =>
         SteamNames.Contains(processName, StringComparer.OrdinalIgnoreCase);
 
-    public static int KillAll(ILogger? log = null)
+    public static int KillAll(ILogger? log = null) => KillPlaySet(null, log);
+
+    // Kill Steam subtree plus any extra exe names (orphaned games whose Steam
+    // parent already exited). extraExeNames are bare process names, any case.
+    public static int KillPlaySet(IEnumerable<string>? extraExeNames, ILogger? log = null)
     {
         int killed = 0;
         try
@@ -24,9 +33,11 @@ public static class Killer
             var steamRoots = new HashSet<int>(
                 all.Where(p => IsSteamName(SafeName(p))).Select(SafeId).Where(id => id > 0));
 
-            if (steamRoots.Count == 0) return 0;
+            var extra = new HashSet<string>(
+                extraExeNames ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
 
-            // Any process whose ancestor chain hits a steam root is in scope.
+            // Any process whose ancestor chain hits a steam root is in scope,
+            // plus any known orphaned game exe still running.
             var targets = new List<Process>();
             foreach (var p in all)
             {
@@ -34,6 +45,13 @@ public static class Killer
                 if (id <= 0) continue;
                 if (steamRoots.Contains(id) || HasSteamAncestor(id, steamRoots, parentOf))
                     targets.Add(p);
+                else if (extra.Count > 0 && extra.Contains(SafeName(p)))
+                    targets.Add(p);
+            }
+            if (targets.Count == 0)
+            {
+                foreach (var p in all) try { p.Dispose(); } catch { }
+                return 0;
             }
             // Kill leaves first (games), roots last.
             targets.Sort((a, b) =>
@@ -82,6 +100,51 @@ public static class Killer
         try
         {
             return Process.GetProcesses().Any(p => IsSteamName(SafeName(p)));
+        }
+        catch { return false; }
+    }
+
+    public static bool IsClientName(string processName) =>
+        ClientNames.Contains(processName, StringComparer.OrdinalIgnoreCase);
+
+    // Playing = Steam client alive, or a game launched by Steam alive, or a
+    // previously-seen game exe (orphan after client exit) still alive.
+    // Updates seenGames in place with descendant exe names observed right now.
+    public static bool IsPlaying(ICollection<string> seenGames)
+    {
+        try
+        {
+            var all = Process.GetProcesses();
+            try
+            {
+                var parentOf = BuildParentMap();
+                var clientRoots = new HashSet<int>(
+                    all.Where(p => IsClientName(SafeName(p))).Select(SafeId).Where(id => id > 0));
+                bool anyClient = clientRoots.Count > 0;
+                var descendants = new List<string>();
+                foreach (var p in all)
+                {
+                    int id = SafeId(p);
+                    if (id <= 0 || clientRoots.Contains(id)) continue;
+                    if (HasSteamAncestor(id, clientRoots, parentOf))
+                    {
+                        string n = SafeName(p);
+                        if (!string.IsNullOrEmpty(n) && !IsClientName(n) && !IsSteamName(n))
+                            descendants.Add(n);
+                    }
+                }
+                foreach (var n in descendants.Distinct(StringComparer.OrdinalIgnoreCase))
+                    if (!seenGames.Contains(n, StringComparer.OrdinalIgnoreCase))
+                        seenGames.Add(n);
+                if (anyClient || descendants.Count > 0) return true;
+                if (seenGames.Count > 0)
+                {
+                    var names = new HashSet<string>(all.Select(SafeName), StringComparer.OrdinalIgnoreCase);
+                    if (seenGames.Any(g => names.Contains(g))) return true;
+                }
+                return false;
+            }
+            finally { foreach (var p in all) try { p.Dispose(); } catch { } }
         }
         catch { return false; }
     }
