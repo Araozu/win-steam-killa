@@ -112,7 +112,7 @@ public class MainForm : Form
 
     private static readonly Color SessionGreen = Color.FromArgb(0x2E, 0xA8, 0x42);
     private static readonly Color DailyBlue = Color.FromArgb(0x1A, 0x73, 0xD9);
-    private static readonly Color DotaRed = Color.FromArgb(0xD3, 0x2F, 0x2F);
+    private static readonly Color DotaBlue = Color.FromArgb(0x1A, 0x73, 0xD9);
     private static readonly Color CooldownRed = Color.FromArgb(0xD3, 0x2F, 0x2F);
 
     private const int BarWidth = 360;
@@ -130,7 +130,7 @@ public class MainForm : Form
     private readonly Label _dailyMax = new() { AutoSize = true, ForeColor = SystemColors.GrayText };
 
     private readonly Label _dotaTitle = new() { AutoSize = true };
-    private readonly TimeBar _dotaBar = new() { FillColor = DotaRed, Size = new Size(BarWidth, BarHeight) };
+    private readonly TimeBar _dotaBar = new() { FillColor = DotaBlue, Size = new Size(BarWidth, BarHeight) };
     private readonly Label _dotaMin = new() { AutoSize = true, Text = "0", ForeColor = SystemColors.GrayText };
     private readonly Label _dotaMax = new() { AutoSize = true, ForeColor = SystemColors.GrayText };
 
@@ -159,14 +159,17 @@ public class MainForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(400, 700);
+        AutoSize = true;
+        AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        ClientSize = new Size(400, 100);
 
         var body = new FlowLayoutPanel
         {
-            Dock = DockStyle.Fill,
+            Dock = DockStyle.Top,
             FlowDirection = FlowDirection.TopDown,
             WrapContents = false,
-            AutoScroll = true,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
             Padding = new Padding(12),
         };
 
@@ -509,6 +512,7 @@ public class MainForm : Form
             _dotaBar.DisplayText = _serviceOk ? "waiting…" : "no service";
             SetMaxLabel(_dotaMax, Hm(Limits.DotaWeeklyBudget.TotalSeconds));
             _status.Text = _serviceOk ? "Waiting for the service…" : "Service unreachable — is SteamTimer running?";
+            _status.Visible = true;
             _detail.Text = _serviceOk ? "" : "Start the Windows service \"SteamTimer\", then hit Recheck now.";
             _todayDetailLabel.Text = _serviceOk ? "Waiting for the service…" : _detail.Text;
             _detectorDetailLabel.Text = "";
@@ -617,12 +621,14 @@ public class MainForm : Form
         if (r.Enforcing || remaining <= 0)
         {
             _status.Text = "Blocked — daily budget used up.";
+            _status.Visible = true;
             TrayContext.Instance?.SetState("Steam blocked until 03:00", TimeSpan.Zero);
         }
         else if (r.InCooldown)
         {
             double cd = Math.Max(0, r.CooldownRemainingSeconds - elapsed);
             _status.Text = "";
+            _status.Visible = false;
             TrayContext.Instance?.SetState($"Cooldown: {Hm(cd)} left", TimeSpan.Zero);
         }
         else
@@ -631,6 +637,7 @@ public class MainForm : Form
                 ? $"This session ends in {Hm(Math.Min(Math.Max(0, sessionMax - sessElapsed), Math.Max(0, remaining)))}, then a cooldown."
                 : "";
             _status.Text = sessionLine;
+            _status.Visible = !string.IsNullOrEmpty(sessionLine);
             var left = TimeSpan.FromSeconds(remaining);
             string tip = (r.Running ? $"Steam: {Hm(remaining)} left today" : $"Paused: {Hm(remaining)} left today")
                 + (r.DotaEnforcing ? " • Dota done" : "");
