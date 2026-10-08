@@ -245,12 +245,11 @@ public class MainForm : Form
 
         Controls.Add(body);
 
-        // Old 400px width was fine; the auto-hugged height felt too cramped,
-        // so keep at least +200px of breathing room below the content.
-        // (Details expansion can still grow past this minimum.)
+        // Old 400px width was fine, so never shrink narrower than that.
+        // Height hugs the content (no forced padding — that was the empty block).
         Load += (_, _) =>
         {
-            MinimumSize = new Size(Math.Max(Width, 416), Height + 200);
+            MinimumSize = new Size(Math.Max(Width, 416), 0);
         };
 
         _uiTimer.Tick += (_, _) => RefreshCountdown();
