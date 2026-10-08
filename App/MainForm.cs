@@ -1,6 +1,4 @@
 using Shared;
-using App.Game;
-using System.Windows.Forms.Integration;
 
 namespace App;
 
@@ -149,34 +147,14 @@ public class MainForm : Form
     private readonly Label _detectorDetailLabel = new() { AutoSize = true, MaximumSize = new Size(360, 0), ForeColor = SystemColors.GrayText };
     private readonly System.Windows.Forms.Timer _uiTimer = new() { Interval = 1000 };
     private readonly System.Windows.Forms.Timer _syncTimer = new() { Interval = 15000 };
-    private readonly FlightGameView _flightGame;
-    private readonly AppSettings _appSettings;
-    private readonly ElementHost _flightHost;
-    private readonly CheckBox _flightToggle = new() { Text = "Show Flight Club", AutoSize = true };
     private PipeResponse? _last;
     private DateTime _lastPollLocal = DateTime.Now;
     private string? _lastNote;
     private bool _serviceOk = true;
     private bool _busy;
 
-    public MainForm() : this(null) { }
-
-    internal MainForm(CrashGame? game, AppSettings? settings = null)
+    public MainForm()
     {
-        _appSettings = settings ?? new AppSettings();
-        _flightToggle.Checked = _appSettings.FlightClubVisible;
-        _flightToggle.Margin = new Padding(0, 8, 0, 0);
-        _flightToggle.CheckedChanged += (_, _) =>
-        {
-            _appSettings.SetFlightClubVisible(_flightToggle.Checked);
-            ApplyFlightClubVisibility();
-        };
-        _flightGame = new FlightGameView(game);
-        _flightGame.BudgetChanged += response => UpdateFromStatus(response);
-        _flightGame.SetAppFocused(false);
-        Activated += (_, _) => _flightGame.SetAppFocused(true);
-        Deactivate += (_, _) => _flightGame.SetAppFocused(false);
-        VisibleChanged += (_, _) => { if (!Visible) _flightGame.SetAppFocused(false); };
         AutoScaleDimensions = new SizeF(96, 96);
         AutoScaleMode = AutoScaleMode.Dpi;
         Text = "Steam Timer";
@@ -185,7 +163,7 @@ public class MainForm : Form
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
         AutoScroll = true;
-        ClientSize = new Size(400, 800);
+        ClientSize = new Size(400, 360);
 
         var body = new FlowLayoutPanel
         {
@@ -267,21 +245,9 @@ public class MainForm : Form
         _detailsPanel.Controls.Add(_detail);
         body.Controls.Add(_detailsPanel);
 
-        var flightHost = new ElementHost
-        {
-            Child = _flightGame,
-            Size = new Size(BarWidth, FlightGameView.PanelHeight),
-            Margin = new Padding(0, 14, 0, 0),
-            TabStop = true,
-        };
-        _flightHost = flightHost;
-        body.Controls.Add(_flightToggle);
-        body.Controls.Add(flightHost);
-        ApplyFlightClubVisibility();
-
         Controls.Add(body);
 
-        // Keep the existing compact width; shorter desktops scroll to the game.
+        // Keep the existing compact width; shorter desktops scroll.
         Load += (_, _) =>
         {
             var work = Screen.FromControl(this).WorkingArea;
@@ -305,21 +271,8 @@ public class MainForm : Form
         {
             _uiTimer.Dispose();
             _syncTimer.Dispose();
-            _flightGame.Dispose();
         }
         base.Dispose(disposing);
-    }
-
-    internal bool FlightClubVisible => _flightHost.Visible;
-
-    internal void SetFlightClubVisible(bool visible) => _flightToggle.Checked = visible;
-
-    private void ApplyFlightClubVisibility()
-    {
-        // Hiding collapses the ElementHost so the window shrinks; the game
-        // model keeps its saved wallet and keeps ticking slowly while hidden
-        // (rendering detaches via IsVisible), then refreshes on show.
-        _flightHost.Visible = _flightToggle.Checked;
     }
 
     // "0" left, max right, optional mid centered, right below its bar.
@@ -562,7 +515,6 @@ public class MainForm : Form
 
     private void RefreshCountdown()
     {
-        _flightGame.SetBudgetStatus(_serviceOk ? _last : null);
         if (_last == null)
         {
             _sessionTitle.Text = "Session";
@@ -720,7 +672,6 @@ public class MainForm : Form
         _todayDetailLabel.Text = $"Budget {Hm(dailyMax)} total\nBase {Hm(r.BaseBudgetSeconds)} + carry {Hm(r.CarryInSeconds)}" +
             (r.BorrowedSeconds > 0 ? $" + borrow {Hm(r.BorrowedSeconds)}" : "") +
             (r.AdvanceDeductionSeconds > 0 ? $" − advance {Hm(r.AdvanceDeductionSeconds)}" : "") +
-            (r.CoinBudgetSeconds != 0 ? $" {(r.CoinBudgetSeconds > 0 ? "+" : "−")} coins {Limits.FormatGain(TimeSpan.FromSeconds(Math.Abs((double)r.CoinBudgetSeconds)))}" : "") +
             $"\nUsed {Hm(r.UsedSeconds)}, left {Hm(remaining)}";
 
         _detectorLabel.Text = r.SteamRunning ? "Detector: Steam detected" : "Detector: nothing detected";

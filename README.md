@@ -39,71 +39,18 @@ After the budget is used, kills Steam + games and keeps enforcing until 03:00.
   60s enforce loop until 03:00. Named pipe `steamtimer` (`status`; the old
   manual `start` now just answers "tracking is automatic").
 - `App/` — WinForms info window + quiet tray (`NotifyIcon` tooltip = countdown,
-  balloons only for warnings/kill/cooldown/Dota), plus the Flight Club minigame.
+  balloons only for warnings/kill/cooldown/Dota).
 - `Shared/` — `Limits` (2h session max, len-based cooldown, 30m carryover,
   9h Dota week), `LogicalDay` (03:00 reset), pipe DTOs.
-
-## Flight Club
-
-An Aviator-style crash game sits below the timer controls. The red
-propeller plane takes off, a multiplier climbs, and you try to cash out before
-it flies away. The animated sky, plane, glowing trail, and effects use WPF's
-Direct3D-backed graphics inside the WinForms window; no extra graphics runtime
-or asset downloads are needed.
-
-- Start with **30 coins**. Another **30 coins** arrives once per week at
-  **Monday 03:00 local**, alongside the Dota weekly reset. Unspent coins carry
-  over; missed offline weeks don't stack. Existing balances are preserved.
-- Flights run **automatically**. The final multiplier lingers for **5 seconds**,
-  followed by a **5-second boarding countdown**. Enter a bet (minimum **1 coin**,
-  up to two decimals), then **Board this flight** before the countdown ends.
-  During flight, click **Cash out** or press **Space** while the game has focus.
-- Leave boarding alone to watch a flight without betting. Each bet applies to
-  just one flight; watching costs no coins, even with an empty wallet.
-- Optional **auto cash-out** collects at a chosen multiplier, from **1.01×**
-  to **100×**. A crash at exactly your target happens first. At the **100×**
-  flight cap, any remaining bet collects automatically.
-- Cash-out returns **bet × multiplier**, rounded **up** to the next coin cent.
-  The button shows exactly **two decimal places** with tabular digits.
-  The flight continues after you cash out so you can see its final multiplier.
-  Recent flights have tooltips showing your bet and payout.
-- Choose how many whole coins to sell: **each coin adds 1 minute to today's
-  budget.** **Buy 1 coin → spend 1 minute 6 seconds** of today's remaining
-  budget. The buttons below the game update
-  the coin balance and Today bar immediately. Trades require the updated Windows
-  service; held bets cannot be sold, and you cannot spend time already played.
-  Saved transactions recover after a timeout or restart without double charges.
-- After **2 minutes without app focus**, the game pauses its clock, stops its
-  update timer, and detaches rendering. Returning resumes the same countdown or
-  flight. This also applies when hidden in the tray; the timer service keeps running.
-- Uncheck **Show Flight Club** above the game to hide it entirely; check it
-  again to bring it back. The choice persists across restarts.
-- Exiting/restarting retains any saved payout; an unsettled bet is lost.
-  Coins and history are saved in
-  `%LOCALAPPDATA%\SteamTimer\flight-wallet.json`, separately from timer state.
-- Outcomes use cryptographic randomness with a 97% survival curve
-  (`floor(0.97 / (1 - U) × 100) / 100`, clamped to 1–100×).
-
-The window scrolls on smaller desktops. Flights work without the Windows service;
-coin/time trades need it. Trades change today's Steam budget; the 2-hour session
-cap, normal cooldowns, and Dota's weekly budget still apply.
-
-See the [Flight Club guide](FLIGHT_CLUB.md) for controls, timing rules,
-wallet recovery, graphics architecture, and build/test instructions.
 
 ## Dev
 
 ```powershell
 dotnet build SteamTimer.slnx
-dotnet test SteamTimer.slnx
 ```
 
 Requires .NET 10 SDK + Windows. Service must run on Windows
 (EventLog, Toolhelp32, named pipes).
-Tests use temporary wallets and deterministic clocks; the UI test renders the
-native game and checks betting, cash-out, hiding, DPI-scaled graphics, and the
-scrollable WinForms host without launching Steam. Set
-`STEAMTIMER_TEST_SCREENSHOTS` to an output directory to save visual evidence.
 
 ## Notes / limits
 

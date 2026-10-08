@@ -6,7 +6,7 @@ namespace Service;
 // Model: each logical day (03:00 local) has a base budget (M-F 1h30m, Sat 2h30m,
 // Sun 4h) plus up to 30m leftover carried from the previous day, plus optional
 // borrows (each -10m tomorrow, +95%/-7pp/0.1%-floor of 10m today, no Sundays)
-// minus yesterday's debt, plus coin sales / minus coin purchases today.
+// minus yesterday's debt.
 // Sessions are automatic: the moment Steam (client or descendant game, + orphan
 // fallback) is seen, a session opens and accrues. Each session can use up to 2h
 // of the day's budget. When a session ends (Steam closed or 2h max), a cooldown
@@ -62,7 +62,7 @@ public class TimerEngine
     }
 
     private static double EffectiveOf(TimerState st) => Math.Max(0,
-        (double)st.BaseBudgetSeconds + st.CarryInSeconds + st.BorrowedSeconds + st.CoinBudgetSeconds - st.AdvanceDeductionSeconds);
+        (double)st.BaseBudgetSeconds + st.CarryInSeconds + st.BorrowedSeconds - st.AdvanceDeductionSeconds);
 
     // Tomorrow's base budget (for the borrow cap + display).
     private static int TomorrowBaseFor(string logicalDay)
@@ -105,7 +105,6 @@ public class TimerEngine
             BorrowCount = 0,
             LastTickUtc = nowUtc,
             DotaWeekStart = week,
-            CoinExchanges = old?.CoinExchanges ?? new(),
         };
         // Weekly Dota usage survives day rollovers inside the same week.
         if (old != null && old.DotaWeekStart == week)
@@ -194,66 +193,11 @@ public class TimerEngine
             {
                 return Borrow(st, nowUtc, resp);
             }
-            if (req.Cmd == CoinExchangeRates.Command)
-                return ExchangeCoins(st, req.Exchange, nowUtc, resp);
             return Fail("unknown cmd", resp);
         }
     }
 
     private static PipeResponse Fail(string e, PipeResponse r) { r.Ok = false; r.Error = e; return r; }
-
-    private PipeResponse ExchangeCoins(TimerState st, CoinExchangeRequest? request, DateTime nowUtc, PipeResponse resp)
-    {
-        Fill(resp, st, nowUtc, liveCheck: false);
-        if (request == null || request.WalletId == Guid.Empty || request.Number < 1 || !request.HasValidAmount)
-            return Fail("Invalid coin exchange request.", resp);
-        st.CoinExchanges.TryGetValue(request.WalletId, out var previous);
-        if (previous?.Request.Number == request.Number && previous.Request == request)
-        {
-            Fill(resp, st, nowUtc, liveCheck: true);
-            resp.ExchangeReceipt = previous;
-            return previous.Applied ? resp : Fail(previous.Error, resp);
-        }
-        if (request.Number != (previous?.Request.Number ?? 0) + 1)
-            return Fail("Coin exchange sequence does not match this wallet.", resp);
-
-        string error = "";
-        int change = request.BuyCoins ? -request.TimeSeconds : request.TimeSeconds;
-        // Account for play since the last metering tick when checking what can
-        // be spent. The worker will accrue these seconds normally on its tick.
-        double unmetered = st.Running && st.CooldownUntilUtc <= nowUtc
-            ? Math.Clamp((nowUtc - st.LastTickUtc).TotalSeconds, 0, MaxTickCredit.TotalSeconds) : 0;
-        if (request.LogicalDay != st.LogicalDay)
-            error = "Today's budget reset before this exchange. Try again for the new day.";
-        else if (request.BuyCoins && EffectiveOf(st) - st.UsedSeconds - unmetered < request.TimeSeconds)
-            error = request.CoinCount == 1
-                ? "You need at least 1 minute 6 seconds of today's remaining budget to buy 1 coin."
-                : "You need at least 11 minutes of today's remaining budget to complete this saved 10-coin purchase.";
-        else if ((long)st.CoinBudgetSeconds + change is < int.MinValue or > int.MaxValue ||
-                 EffectiveOf(st) + change > int.MaxValue)
-            error = "Today's budget cannot hold any more time.";
-
-        var receipt = new CoinExchangeReceipt(request, error.Length == 0, error);
-        var next = st.Copy();
-        next.CoinExchanges = new(st.CoinExchanges) { [request.WalletId] = receipt };
-        if (receipt.Applied)
-        {
-            next.CoinBudgetSeconds += change;
-            if (EffectiveOf(next) > next.UsedSeconds) next.KillNotified = false;
-            if (EffectiveOf(next) - next.UsedSeconds > Limits.WarnBefore.TotalSeconds) next.Warned15m = false;
-        }
-        // Save the adjustment and receipt together before publishing either.
-        _store.Save(next);
-        _state = next;
-        Fill(resp, next, nowUtc, liveCheck: true);
-        resp.ExchangeReceipt = receipt;
-        if (!receipt.Applied) return Fail(receipt.Error, resp);
-        string coins = $"{request.CoinCount} {(request.CoinCount == 1 ? "coin" : "coins")}";
-        string time = Limits.FormatGain(TimeSpan.FromSeconds(request.TimeSeconds));
-        resp.ActionNote = request.BuyCoins ? $"Bought {coins} for {time} of today's budget."
-            : $"Sold {coins} for {time} of today's budget.";
-        return resp;
-    }
 
     private static string BuildRecheckNote(PipeResponse r)
     {
@@ -416,9 +360,6 @@ public class TimerEngine
         r.BorrowedSeconds = st.BorrowedSeconds;
         r.BorrowCount = st.BorrowCount;
         r.AdvanceDeductionSeconds = st.AdvanceDeductionSeconds;
-        r.CoinBudgetSeconds = st.CoinBudgetSeconds;
-        r.SupportsCoinExchange = true;
-        r.CoinExchangeVersion = CoinExchangeRates.ProtocolVersion;
         r.TomorrowBaseSeconds = TomorrowBaseFor(st.LogicalDay);
         r.NextBorrowEffectiveness = Limits.NextBorrowEffectiveness(st.BorrowCount);
         r.NextBorrowGainSeconds = (int)Limits.BorrowGainForNumber(st.BorrowCount + 1).TotalSeconds;

@@ -4,7 +4,7 @@ public class TimerState
 {
     public int Version { get; set; } = 3;
     // Logical day "yyyy-MM-dd" (03:00 local -> 03:00 local). Base budget derives
-    // from its weekday; effective budget includes carry-in, borrowing, and coins.
+    // from its weekday; effective budget includes carry-in and borrowing.
     public string LogicalDay { get; set; } = "";
     public int BaseBudgetSeconds { get; set; }
     public int CarryInSeconds { get; set; }
@@ -14,10 +14,6 @@ public class TimerState
     public int BorrowedSeconds { get; set; }
     public int BorrowCount { get; set; }
     public int AdvanceDeductionSeconds { get; set; }
-    // Net budget added by coin sales or spent on coin purchases, today only.
-    public int CoinBudgetSeconds { get; set; }
-    // Latest durable receipt per wallet; retained across day rollovers.
-    public Dictionary<Guid, CoinExchangeReceipt> CoinExchanges { get; set; } = new();
     // Total seconds of Steam play accrued today against the effective budget.
     public double UsedSeconds { get; set; }
     // True while a play session is open (Steam seen running, accruing on ticks).
@@ -46,7 +42,6 @@ public class TimerState
     public bool DotaWarned { get; set; }
     public bool DotaNotified { get; set; }
 
-    // Exchange commits replace the receipt dictionary before saving this snapshot.
     public TimerState Copy() => (TimerState)MemberwiseClone();
 }
 
@@ -66,9 +61,8 @@ public class GameRecord
 // Pipe messages (one JSON object per connection, newline terminated).
 public class PipeRequest
 {
-    public string Cmd { get; set; } = ""; // "status" | "recheck" | "kill" | "borrow" | "coin-exchange"
+    public string Cmd { get; set; } = ""; // "status" | "recheck" | "kill" | "borrow"
     public int Seconds { get; set; }
-    public CoinExchangeRequest? Exchange { get; set; }
 }
 
 public class PipeResponse
@@ -91,10 +85,6 @@ public class PipeResponse
     public int BorrowedSeconds { get; set; }
     public int BorrowCount { get; set; }
     public int AdvanceDeductionSeconds { get; set; }
-    public int CoinBudgetSeconds { get; set; }
-    public bool SupportsCoinExchange { get; set; }
-    public int CoinExchangeVersion { get; set; }
-    public CoinExchangeReceipt? ExchangeReceipt { get; set; }
     public int TomorrowBaseSeconds { get; set; }
     // Next press: effectiveness (0.95 first, -0.07 each, 0.001 floor) + gain seconds.
     public double NextBorrowEffectiveness { get; set; }
