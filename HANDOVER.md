@@ -105,6 +105,24 @@ Self-control grade (user keeps Admin): friction, not fortress.
   against the fixed service was never run from here (shell is non-elevated).
 
 ## Current state / how to continue
+- **Flight Club minigame:** `App/Game/CrashGame.cs` owns monotonic round timing,
+  crypto-sampled crash points, manual/auto cash-out, and the 100x flight cap.
+  `FlightWallet.cs` atomically persists the per-user coin wallet at
+  `%LOCALAPPDATA%\SteamTimer\flight-wallet.json` (not service state): 100 coins
+  per 03:00 logical day, carry-over balance, no stacked offline grants, 8-round
+  history. Stakes are saved before takeoff; restart recovers saved payouts and
+  forfeits unpaid pending bets. Never reset a corrupt wallet silently.
+  `FlightGameView.xaml(.cs)` is embedded beneath the existing controls through
+  `ElementHost`; `FlightScene.cs` draws the animated plane/sky/trail/effects via
+  WPF's Direct3D-backed compositor. The model timer continues while hidden;
+  composition callbacks detach while hidden/disposed. WPF is enabled alongside
+  WinForms in `App.csproj`. MainForm is DPI-scaled and vertically scrollable.
+  `Program.cs` uses a session-local mutex + activation event so subsequent
+  launches open the existing window instead of creating competing wallets.
+- **Verification:** `dotnet test SteamTimer.slnx` runs the xUnit `Tests/` project,
+  including isolated wallet/round tests and an STA native UI/rendering test.
+  Optional `STEAMTIMER_TEST_SCREENSHOTS` saves PNG evidence. No Steam launch or
+  real wallet writes occur in tests.
 - HEAD has the v3 automatic model. **User must re-run
   `Setup/install.ps1` as Admin to deploy it** (deployed binary is still v2:
   old state.json will be discarded on first v3 boot, Dota week starts fresh,

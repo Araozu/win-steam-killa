@@ -7,14 +7,26 @@ static class Program
     {
         ApplicationConfiguration.Initialize();
         // Single instance: if tray already runs, just open the window.
-        using var mutex = new Mutex(true, @"Global\SteamTimerApp", out bool first);
+        using var mutex = new Mutex(true, @"Local\SteamTimerApp", out bool first);
+        using var openWindow = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\SteamTimerApp.Open");
         if (!first)
         {
-            Application.Run(new MainForm());
+            openWindow.Set();
             return;
         }
-        var tray = new TrayContext();
+        using var tray = new TrayContext();
         tray.ShowMain();
-        Application.Run(tray);
+        using var dispatcher = new Control();
+        dispatcher.CreateControl();
+        var activation = ThreadPool.RegisterWaitForSingleObject(openWindow, (_, _) =>
+        {
+            try { dispatcher.BeginInvoke(tray.ShowMain); }
+            catch (InvalidOperationException) { } // Application is shutting down.
+        }, null, Timeout.Infinite, executeOnlyOnce: false);
+        try
+        {
+            Application.Run(tray);
+        }
+        finally { activation.Unregister(null); }
     }
 }

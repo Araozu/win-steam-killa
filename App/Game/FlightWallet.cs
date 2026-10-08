@@ -1,0 +1,153 @@
+using System.Globalization;
+using System.Text.Json;
+using Shared;
+
+namespace App.Game;
+
+internal sealed record FlightResult(decimal CrashAt, decimal Bet, decimal CashedAt, decimal Payout);
+internal sealed record FlightTicket(Guid Id, decimal Bet, decimal CrashAt, decimal AutoCashout,
+    decimal CashedAt = 0, decimal Payout = 0);
+
+internal sealed record FlightWalletState
+{
+    public int Version { get; init; } = 1;
+    public decimal Balance { get; init; }
+    public string LastGrantDay { get; init; } = "";
+    public decimal LastBet { get; init; } = 10;
+    public decimal LastAutoCashout { get; init; }
+    public FlightTicket? Pending { get; init; }
+    public List<FlightResult> History { get; init; } = [];
+}
+
+// Separate from the service's time budget. A stake is durably deducted BEFORE
+// takeoff; an interrupted flight stays paid/lost rather than refunding a restart.
+internal sealed class FlightWallet
+{
+    public const decimal DailyCoins = 100;
+    public const decimal MaximumBalance = 1_000_000_000_000m;
+    private readonly string _path;
+    private FlightWalletState _state;
+    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+
+    public decimal Balance => _state.Balance;
+    public decimal LastBet => _state.LastBet;
+    public decimal LastAutoCashout => _state.LastAutoCashout;
+    public IReadOnlyList<FlightResult> History => _state.History;
+
+    public static string DefaultPath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "SteamTimer", "flight-wallet.json");
+
+    public FlightWallet(string path, DateTime localNow)
+    {
+        _path = path;
+        if (File.Exists(path))
+        {
+            _state = JsonSerializer.Deserialize<FlightWalletState>(File.ReadAllText(path))
+                ?? throw new InvalidDataException("The coin wallet is empty.");
+            Validate(_state);
+        }
+        else
+        {
+            _state = new FlightWalletState();
+        }
+
+        if (_state.Pending is { } interrupted)
+            Commit(WithResult(_state, interrupted));
+        RefreshDailyGrant(localNow);
+    }
+
+    public bool RefreshDailyGrant(DateTime localNow)
+    {
+        string day = LogicalDay.ForLocal(localNow);
+        // A clock rollback cannot claim the same day again. Missed offline days
+        // don't stack grants; the current day gets one 100-coin allowance.
+        if (string.CompareOrdinal(day, _state.LastGrantDay) <= 0) return false;
+        Commit(_state with
+        {
+            Balance = Math.Min(MaximumBalance, _state.Balance + DailyCoins),
+            LastGrantDay = day,
+        });
+        return true;
+    }
+
+    public FlightTicket PlaceBet(decimal bet, decimal crashAt, decimal autoCashout)
+    {
+        if (_state.Pending != null) throw new InvalidOperationException("A flight is already in progress.");
+        if (bet < 1 || bet > Balance || decimal.Round(bet, 2) != bet)
+            throw new ArgumentOutOfRangeException(nameof(bet), "Choose a bet from 1 coin up to your balance (two decimal places).");
+        if (crashAt < 1 || crashAt > CrashGame.MaximumMultiplier || decimal.Round(crashAt, 2) != crashAt)
+            throw new ArgumentOutOfRangeException(nameof(crashAt));
+        if (autoCashout != 0 && (autoCashout < 1.01m || autoCashout > CrashGame.MaximumMultiplier || decimal.Round(autoCashout, 2) != autoCashout))
+            throw new ArgumentOutOfRangeException(nameof(autoCashout));
+        var ticket = new FlightTicket(Guid.NewGuid(), bet, crashAt, autoCashout);
+        Commit(_state with { Balance = Balance - bet, Pending = ticket, LastBet = bet, LastAutoCashout = autoCashout });
+        return ticket;
+    }
+
+    public decimal CashOut(Guid id, decimal multiplier)
+    {
+        var ticket = RequireTicket(id);
+        if (ticket.CashedAt > 0) return ticket.Payout;
+        if (multiplier < 1 || multiplier >= ticket.CrashAt && !(multiplier == CrashGame.MaximumMultiplier && ticket.CrashAt == CrashGame.MaximumMultiplier))
+            throw new InvalidOperationException("The plane has already flown away.");
+        decimal payout = decimal.Floor(ticket.Bet * multiplier * 100) / 100;
+        Commit(_state with
+        {
+            Balance = Math.Min(MaximumBalance, Balance + payout),
+            Pending = ticket with { CashedAt = multiplier, Payout = payout },
+        });
+        return payout;
+    }
+
+    public void Finish(Guid id) => Commit(WithResult(_state, RequireTicket(id)));
+
+    private FlightTicket RequireTicket(Guid id) => _state.Pending is { } ticket && ticket.Id == id
+        ? ticket : throw new InvalidOperationException("This flight is no longer active.");
+
+    private static FlightWalletState WithResult(FlightWalletState state, FlightTicket ticket) => state with
+    {
+        Pending = null,
+        History = state.History.Prepend(new FlightResult(ticket.CrashAt, ticket.Bet, ticket.CashedAt, ticket.Payout)).Take(8).ToList(),
+    };
+
+    private void Commit(FlightWalletState next)
+    {
+        string directory = Path.GetDirectoryName(Path.GetFullPath(_path))!;
+        Directory.CreateDirectory(directory);
+        string temp = _path + ".tmp";
+        try
+        {
+            using (var file = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                JsonSerializer.Serialize(file, next, JsonOptions);
+                file.Flush(flushToDisk: true);
+            }
+            File.Move(temp, _path, overwrite: true);
+            _state = next;
+        }
+        finally
+        {
+            if (File.Exists(temp)) File.Delete(temp);
+        }
+    }
+
+    private static void Validate(FlightWalletState state)
+    {
+        if (state.Version != 1 || state.Balance < 0 || state.Balance > MaximumBalance ||
+            decimal.Round(state.Balance, 2) != state.Balance || state.History == null || state.History.Count > 8 ||
+            !DateTime.TryParseExact(state.LastGrantDay, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _) ||
+            state.LastBet < 1 || state.LastBet > MaximumBalance || decimal.Round(state.LastBet, 2) != state.LastBet ||
+            state.LastAutoCashout != 0 && (state.LastAutoCashout < 1.01m || state.LastAutoCashout > CrashGame.MaximumMultiplier) ||
+            state.History.Any(r => r == null || !ValidFlight(r.Bet, r.CrashAt, r.CashedAt, r.Payout)) ||
+            state.Pending is { } p && (!ValidFlight(p.Bet, p.CrashAt, p.CashedAt, p.Payout) ||
+                p.AutoCashout != 0 && (p.AutoCashout < 1.01m || p.AutoCashout > CrashGame.MaximumMultiplier)))
+            throw new InvalidDataException("The saved coin wallet is invalid. Its file has been preserved.");
+    }
+
+    private static bool ValidFlight(decimal bet, decimal crashAt, decimal cashedAt, decimal payout)
+        => bet >= 1 && bet <= MaximumBalance && decimal.Round(bet, 2) == bet &&
+           crashAt >= 1 && crashAt <= CrashGame.MaximumMultiplier && decimal.Round(crashAt, 2) == crashAt &&
+           cashedAt >= 0 && cashedAt <= crashAt &&
+           payout == (cashedAt == 0 ? 0 : decimal.Floor(bet * cashedAt * 100) / 100);
+}

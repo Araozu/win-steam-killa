@@ -1,8 +1,10 @@
 using Shared;
+using App.Game;
+using System.Windows.Forms.Integration;
 
 namespace App;
 
-// Display-only window: everything is auto-tracked by the service.
+// Timer controls: play time is auto-tracked by the service.
 // Three manual actions exist for clarity / emergencies:
 //   Recheck — ask the service what it sees RIGHT NOW (client/games/orphans).
 //   Force close — kill Steam + games now and stop the timer (normal cooldown
@@ -146,22 +148,28 @@ public class MainForm : Form
     private readonly Label _todayDetailLabel = new() { AutoSize = true, MaximumSize = new Size(360, 0), ForeColor = SystemColors.GrayText };
     private readonly Label _detectorDetailLabel = new() { AutoSize = true, MaximumSize = new Size(360, 0), ForeColor = SystemColors.GrayText };
     private readonly System.Windows.Forms.Timer _uiTimer = new() { Interval = 1000 };
+    private readonly System.Windows.Forms.Timer _syncTimer = new() { Interval = 15000 };
+    private readonly FlightGameView _flightGame;
     private PipeResponse? _last;
     private DateTime _lastPollLocal = DateTime.Now;
     private string? _lastNote;
     private bool _serviceOk = true;
     private bool _busy;
 
-    public MainForm()
+    public MainForm() : this(null) { }
+
+    internal MainForm(CrashGame? game)
     {
+        _flightGame = new FlightGameView(game);
+        AutoScaleDimensions = new SizeF(96, 96);
+        AutoScaleMode = AutoScaleMode.Dpi;
         Text = "Steam Timer";
-        FormBorderStyle = FormBorderStyle.FixedDialog;
+        FormBorderStyle = FormBorderStyle.Sizable;
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        AutoSize = true;
-        AutoSizeMode = AutoSizeMode.GrowAndShrink;
-        ClientSize = new Size(400, 100);
+        AutoScroll = true;
+        ClientSize = new Size(400, 800);
 
         var body = new FlowLayoutPanel
         {
@@ -243,21 +251,44 @@ public class MainForm : Form
         _detailsPanel.Controls.Add(_detail);
         body.Controls.Add(_detailsPanel);
 
+        var flightHost = new ElementHost
+        {
+            Child = _flightGame,
+            Size = new Size(BarWidth, 438),
+            Margin = new Padding(0, 14, 0, 0),
+            TabStop = true,
+        };
+        body.Controls.Add(flightHost);
+
         Controls.Add(body);
 
-        // Old 400px width was fine, so never shrink narrower than that.
-        // Height hugs the content (no forced padding — that was the empty block).
+        // Keep the existing compact width; shorter desktops scroll to the game.
         Load += (_, _) =>
         {
-            MinimumSize = new Size(Math.Max(Width, 416), 0);
+            var work = Screen.FromControl(this).WorkingArea;
+            ClientSize = new Size(Math.Max(400, body.PreferredSize.Width + SystemInformation.VerticalScrollBarWidth),
+                Math.Min(body.PreferredSize.Height, work.Height - (Height - ClientSize.Height) - 32));
+            MinimumSize = new Size((int)Math.Round(416 * DeviceDpi / 96d),
+                Math.Min(work.Height, (int)Math.Round(360 * DeviceDpi / 96d)));
+            Location = new Point(work.Left + (work.Width - Width) / 2, work.Top + Math.Max(0, (work.Height - Height) / 2));
         };
 
         _uiTimer.Tick += (_, _) => RefreshCountdown();
         _uiTimer.Start();
         _ = SyncFromServiceAsync();
-        var sync = new System.Windows.Forms.Timer { Interval = 15000 };
-        sync.Tick += async (_, _) => await SyncFromServiceAsync();
-        sync.Start();
+        _syncTimer.Tick += async (_, _) => await SyncFromServiceAsync();
+        _syncTimer.Start();
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _uiTimer.Dispose();
+            _syncTimer.Dispose();
+            _flightGame.Dispose();
+        }
+        base.Dispose(disposing);
     }
 
     // "0" left, max right, optional mid centered, right below its bar.
@@ -286,17 +317,17 @@ public class MainForm : Form
     private static void SetMaxLabel(Label l, string text)
     {
         l.Text = text;
-        // Keep it flush right under the 360px bar (no handle needed).
+        // Use the scaled row width so the labels align at high DPI too.
         var w = TextRenderer.MeasureText(text, l.Font).Width;
-        l.Location = new Point(Math.Max(0, BarWidth - w), 0);
+        l.Location = new Point(Math.Max(0, (l.Parent?.ClientSize.Width ?? BarWidth) - w), 0);
     }
 
     private static void SetMidLabel(Label l, string text)
     {
         l.Text = text;
-        // Keep it centered under the 360px bar.
+        // Keep it centered under the scaled bar.
         var w = TextRenderer.MeasureText(text, l.Font).Width;
-        l.Location = new Point(Math.Max(0, (BarWidth - w) / 2), 0);
+        l.Location = new Point(Math.Max(0, ((l.Parent?.ClientSize.Width ?? BarWidth) - w) / 2), 0);
     }
 
     private async Task SyncFromServiceAsync()

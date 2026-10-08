@@ -39,18 +39,50 @@ After the budget is used, kills Steam + games and keeps enforcing until 03:00.
   60s enforce loop until 03:00. Named pipe `steamtimer` (`status`; the old
   manual `start` now just answers "tracking is automatic").
 - `App/` — WinForms info window + quiet tray (`NotifyIcon` tooltip = countdown,
-  balloons only for warnings/kill/cooldown/Dota). No inputs by design.
+  balloons only for warnings/kill/cooldown/Dota), plus the Flight Club minigame.
 - `Shared/` — `Limits` (2h session max, len-based cooldown, 30m carryover,
   9h Dota week), `LogicalDay` (03:00 reset), pipe DTOs.
+
+## Flight Club
+
+An Aviator-style, coin-only crash game sits below the timer controls. The red
+propeller plane takes off, a multiplier climbs, and you try to cash out before
+it flies away. The animated sky, plane, glowing trail, and effects use WPF's
+Direct3D-backed graphics inside the WinForms window; no extra graphics runtime
+or asset downloads are needed.
+
+- Start with **100 coins**. Another **100 coins** arrives once per logical day
+  at **03:00 local**. Unspent coins carry over; missed offline days don't stack.
+- Enter a bet (minimum **1 coin**, up to two decimals), then **Take off**.
+  During flight, click **Cash out** or press **Space** while the game has focus.
+- Optional **auto cash-out** collects at a chosen multiplier, from **1.01×**
+  to **100×**. A crash at exactly your target happens first. At the **100×**
+  flight cap, any remaining bet collects automatically.
+- Cash-out returns **bet × multiplier**, rounded down to two coin decimals.
+  The flight continues after you cash out so you can see its final multiplier.
+  Recent flights have tooltips showing your bet and payout.
+- Closing to the tray doesn't pause a live flight. Exiting/restarting retains
+  any saved payout; an unsettled bet is lost. Coins and history are saved in
+  `%LOCALAPPDATA%\SteamTimer\flight-wallet.json`, separately from timer state.
+- Outcomes use cryptographic randomness with a 97% survival curve
+  (`floor(0.97 / (1 - U) × 100) / 100`, clamped to 1–100×).
+
+The window scrolls on smaller desktops, and the game works independently of
+the Windows service. Coin bets never change your Steam or Dota time budgets.
 
 ## Dev
 
 ```powershell
 dotnet build SteamTimer.slnx
+dotnet test SteamTimer.slnx
 ```
 
 Requires .NET 10 SDK + Windows. Service must run on Windows
 (EventLog, Toolhelp32, named pipes).
+Tests use temporary wallets and deterministic clocks; the UI test renders the
+native game and checks betting, cash-out, hiding, DPI-scaled graphics, and the
+scrollable WinForms host without launching Steam. Set
+`STEAMTIMER_TEST_SCREENSHOTS` to an output directory to save visual evidence.
 
 ## Notes / limits
 
