@@ -3,6 +3,9 @@
 Flight Club is the plane-themed crash minigame below Steam Timer's time bars
 and buttons. It uses local play coins and runs inside the Windows app, including
 when the timer service is unreachable or Steam is blocked.
+Flights loop automatically: board one during the **5-second** countdown or
+watch it take off without a bet. The final multiplier lingers for **5 seconds**,
+then the next boarding countdown opens automatically.
 
 ## Playing
 
@@ -11,15 +14,23 @@ when the timer service is unreachable or Steam is blocked.
    Windows region's decimal separator.
 2. Optionally enable **Auto cash-out** and enter a target from **1.01×** to
    **100×**. The target is locked for that flight once you place the bet.
-3. Click **Take off**. The stake is deducted immediately, followed by a
-   **2.8-second** takeoff countdown.
+3. During **Boarding open**, click **Board this flight**. The stake is deducted
+   immediately. Joining does not restart the countdown: the plane takes off
+   when the existing **5-second** timer reaches zero, with or without you.
 4. As the plane climbs, click **Cash out**, or press **Space** while the game
    has keyboard focus. Your return is the stake multiplied by the multiplier
-   at the time the action is processed, rounded down to two coin decimals.
+   at the time the action is processed, rounded **up** to the next coin cent.
+   The button always shows exactly **two decimal places**, with tabular digits
+   to keep the amount steady as it changes.
 5. If the plane flies away first, the stake is lost. If you cash out, the
    flight continues so you can see how far it would have gone.
-6. After the flight ends, click **Fly again**. The button waits briefly for
-   the departure animation to finish before accepting the next flight.
+6. After the flight ends, its final multiplier stays visible for **5 seconds**,
+   then a new **5-second** boarding window opens. Each bet applies to one flight;
+   choose whether to board again. Leaving a countdown alone means spectating.
+
+Boarding closes at takeoff. You cannot join a flight already in progress,
+and the betting controls lock once you board. Spectating costs no coins and
+works even with an empty wallet.
 
 The **−** button halves the entered bet, and **+** doubles it. Both clamp the
 amount to the available betting range. The **10** and **25** presets also
@@ -28,6 +39,7 @@ setting used to start a flight.
 
 The five latest crash multipliers appear above the sky. Hover over one to see
 its stake and, when applicable, cash-out multiplier and total returned coins.
+Flights you watched without betting are marked as such in the tooltip.
 The wallet retains eight flights in total.
 
 ### Payout example
@@ -35,6 +47,10 @@ The wallet retains eight flights in total.
 A **10-coin** bet cashed out at **2.00×** returns **20 coins**, including the
 original stake. Starting from 100 coins, the balance becomes 90 when you bet
 and 110 when you collect. Crashing before collection leaves it at 90.
+
+A **1.01-coin** bet cashed out at **1.50×** returns **1.52 coins**: the exact
+product is 1.515, rounded upward to the next cent. Products already at an exact
+cent are unchanged.
 
 ## Daily coins
 
@@ -47,7 +63,8 @@ and 110 when you collect. Crashing before collection leaves it at 90.
 - Moving the clock back to an already-claimed date does not grant more coins.
 - A daily grant during a flight adds to the balance without changing the bet.
 - If fewer than 1 coin remains after a flight, the game shows the next grant
-  time and disables takeoff until enough coins are available.
+  time and disables boarding until enough coins are available. Flights keep
+  running so you can watch them.
 - Balances are capped at **1,000,000,000,000 coins**.
 
 Hover over the coin balance to see the daily allowance and next reset time.
@@ -57,12 +74,14 @@ Hover over the coin balance to see the daily allowance and next reset time.
 The state machine is:
 
 ```text
-Ready → Countdown → Flying → Crashed
-                      │
-                      └─ cash-out credits coins; flight keeps going
-
-Crashed → Countdown on the next bet
+Boarding (5s) → Flying → Crashed (5s) → Boarding (5s) → ...
+                 │
+                 └─ cash-out credits coins; flight keeps going
 ```
+
+Boarding optionally attaches one saved bet to the current round. Its clock
+starts independently of betting. A spectator round still samples a crash point,
+animates, and records its result, without deducting or crediting coins.
 
 Each flight samples one hidden crash multiplier before takeoff. The random
 source is `RandomNumberGenerator`, using 53 random bits to produce a uniform
@@ -78,7 +97,7 @@ The live multiplier starts at 1.00× and grows exponentially:
 multiplier(t) = exp(0.16 × t)
 ```
 
-Here `t` is seconds since the countdown ended. The displayed multiplier is
+Here `t` is seconds since boarding ended. The displayed multiplier is
 rounded down to two decimal places. A 2× flight takes approximately 4.33
 seconds after takeoff; 100× takes approximately 28.78 seconds.
 
@@ -86,6 +105,8 @@ Timing uses `Stopwatch`'s monotonic clock rather than counting rendered frames.
 Every cash-out action updates the round first, so a stale display cannot
 collect a bet after its actual crash time. Floating-point rounding cannot
 promote a pre-crash display to the crash multiplier.
+Boarding and cash-out actions also check the round ID, so a delayed click for
+one flight cannot place or collect a bet on another.
 
 **Automatic cash-out** is resolved in event-time order: if its target was
 reached before the crash, it pays even when an update arrives late. A crash
@@ -94,9 +115,11 @@ any remaining bet is collected automatically when the plane reaches it.
 
 ## Hiding, exiting, and saved state
 
-Closing the main window hides it to the tray. A live flight continues, and
-auto-cash-out still works. Reopening shows the current or completed flight.
+Closing the main window hides it to the tray. The entire loop continues, and
+auto-cash-out still works. Reopening shows the current flight or boarding window.
 Rendering callbacks detach while the graphics surface is hidden.
+After a long suspension, the active flight settles once and the loop opens a
+fresh 5-second boarding window, rather than replaying every missed round.
 
 The wallet is stored per Windows user at:
 
@@ -114,17 +137,19 @@ It is separate from the service's
 | `LastGrantDay` | Most recent logical date that received its allowance |
 | `LastBet` / `LastAutoCashout` | Settings used to place the last bet |
 | `Pending` | Active flight ID, stake, crash point, auto target, and saved payout |
-| `History` | Up to eight completed or interrupted flights, newest first |
+| `History` | Up to eight completed or interrupted flights, newest first; a zero stake denotes spectating |
 
 Each mutation writes a temporary file, flushes it to disk, then replaces the
 wallet file. The in-memory wallet changes only after the replacement succeeds.
-The stake is saved **before** the countdown; a payout is saved **before** it is
+The stake is saved **when you board**; a payout is saved **before** it is
 shown as collected.
 
 If the application exits during a flight, the next launch records that flight
-in history and returns to the ready screen. A previously saved payout remains
+in history and opens a new boarding window. A previously saved payout remains
 credited. An unpaid stake stays lost; restarting does not refund it or resume
 the flight. Recovery is recorded once, so reopening again cannot pay twice.
+Existing history and pending payouts from the earlier round-down calculation
+remain valid and keep their saved values. Newly collected payouts round up.
 
 Unreadable or invalid wallet data is preserved. The game displays a wallet
 error and disables betting instead of silently replacing the saved balance.
@@ -141,7 +166,7 @@ The graphics are vector paths and gradients: a red propeller plane, animated
 stars and clouds, a moving runway, a curved glowing trail, departure particles,
 and cash-out celebration particles. `CompositionTarget.Rendering` schedules
 visual updates, limited to at most 60 per second. The independent game timer
-updates active rounds every 50 ms and idle state every second; drawing does
+updates the loop every 50 ms while visible and every 250 ms while hidden; drawing does
 not settle bets or mutate the wallet.
 
 The host window supports DPI scaling and vertical scrolling on shorter
@@ -175,9 +200,10 @@ dotnet publish App/App.csproj -c Release -r win-x64 --self-contained false -o pu
 
 The test suite uses temporary wallets and deterministic clocks. The native UI
 test runs on an STA thread and checks input validation, takeoff, automatic and
-keyboard cash-out, hidden-flight completion, DPI-scaled rendering, and the
-scrollable WinForms host. Tests do not launch Steam or write to the real coin
-wallet.
+keyboard cash-out, spectator flights, hidden-flight completion, the 5-second
+result display and boarding countdown, two-decimal payout display, DPI-scaled
+rendering, and the scrollable WinForms host. Tests do not launch Steam or write
+to the real coin wallet.
 
 To save screenshots of the native game states and host window:
 
@@ -186,7 +212,7 @@ $env:STEAMTIMER_TEST_SCREENSHOTS = "$env:TEMP\SteamTimer-flight-evidence"
 dotnet test SteamTimer.slnx -c Release --verbosity minimal
 ```
 
-Verification on **2026-10-08**: **29 tests passed**, Release solution build
+Verification on **2026-10-08**: **40 tests passed**, Release solution build
 completed with **0 warnings and 0 errors**, and the Windows x64 app published
 successfully. Screenshots of flight states, scaled graphics, and the actual
 host window were also inspected.

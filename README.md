@@ -53,15 +53,20 @@ or asset downloads are needed.
 
 - Start with **100 coins**. Another **100 coins** arrives once per logical day
   at **03:00 local**. Unspent coins carry over; missed offline days don't stack.
-- Enter a bet (minimum **1 coin**, up to two decimals), then **Take off**.
+- Flights run **automatically**. The final multiplier lingers for **5 seconds**,
+  followed by a **5-second boarding countdown**. Enter a bet (minimum **1 coin**,
+  up to two decimals), then **Board this flight** before the countdown ends.
   During flight, click **Cash out** or press **Space** while the game has focus.
+- Leave boarding alone to watch a flight without betting. Each bet applies to
+  just one flight; watching costs no coins, even with an empty wallet.
 - Optional **auto cash-out** collects at a chosen multiplier, from **1.01×**
   to **100×**. A crash at exactly your target happens first. At the **100×**
   flight cap, any remaining bet collects automatically.
-- Cash-out returns **bet × multiplier**, rounded down to two coin decimals.
+- Cash-out returns **bet × multiplier**, rounded **up** to the next coin cent.
+  The button shows exactly **two decimal places** with tabular digits.
   The flight continues after you cash out so you can see its final multiplier.
   Recent flights have tooltips showing your bet and payout.
-- Closing to the tray doesn't pause a live flight. Exiting/restarting retains
+- Closing to the tray keeps the flight loop running. Exiting/restarting retains
   any saved payout; an unsettled bet is lost. Coins and history are saved in
   `%LOCALAPPDATA%\SteamTimer\flight-wallet.json`, separately from timer state.
 - Outcomes use cryptographic randomness with a 97% survival curve

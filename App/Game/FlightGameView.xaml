@@ -69,10 +69,10 @@
                     <local:FlightScene x:Name="Scene" />
                     <StackPanel HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,22,0,0" IsHitTestVisible="False">
                         <TextBlock x:Name="PhaseText" FontSize="10" FontWeight="SemiBold" Foreground="#AEC1E3"
-                                   HorizontalAlignment="Center" Text="READY FOR TAKEOFF" />
-                        <TextBlock x:Name="MultiplierText" Text="1.00×" FontSize="38" FontWeight="Bold"
+                                   HorizontalAlignment="Center" Text="BOARDING OPEN · TAKEOFF IN" />
+                        <TextBlock x:Name="MultiplierText" Text="5s" FontSize="38" FontWeight="Bold"
                                    HorizontalAlignment="Center" />
-                        <TextBlock x:Name="OutcomeText" FontSize="11" Foreground="#AEC1E3" HorizontalAlignment="Center" />
+                        <TextBlock x:Name="OutcomeText" FontSize="11" Foreground="#AEC1E3" HorizontalAlignment="Center" Typography.NumeralAlignment="Tabular" />
                     </StackPanel>
                     <TextBlock Text="SPACE TO CASH OUT" FontSize="8" Foreground="#7389AD"
                                HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,10,8" IsHitTestVisible="False" />
@@ -102,8 +102,8 @@
                          IsEnabled="False" MaxLength="6" AutomationProperties.Name="Auto cash-out multiplier" />
                 <TextBlock Text="×" Foreground="{StaticResource Muted}" VerticalAlignment="Center" />
             </StackPanel>
-            <Button Grid.Row="5" x:Name="ActionButton" Content="TAKE OFF" FontWeight="Bold" FontSize="13"
-                    Background="#EF4C68" Click="ActionClick" Margin="0,3,0,3" />
+            <Button Grid.Row="5" x:Name="ActionButton" Content="BOARD THIS FLIGHT" FontWeight="Bold" FontSize="13"
+                    Background="#EF4C68" Click="ActionClick" Margin="0,3,0,3" Typography.NumeralAlignment="Tabular" />
             <TextBlock Grid.Row="6" x:Name="MessageText" FontSize="10" Foreground="{StaticResource Muted}"
                        TextWrapping="Wrap" VerticalAlignment="Center" />
         </Grid>

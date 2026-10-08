@@ -78,7 +78,7 @@ public sealed class FlightScene : FrameworkElement, IDisposable
         dc.PushTransform(new ScaleTransform(ActualWidth / 328, ActualHeight / 186));
         dc.DrawRectangle(Sky, null, new Rect(0, 0, 328, 186));
         double t = _ambient.Elapsed.TotalSeconds;
-        var phase = Game?.Phase ?? FlightPhase.Ready;
+        var phase = Game?.Phase ?? FlightPhase.Boarding;
         bool flying = phase is FlightPhase.Flying or FlightPhase.Crashed;
         double elapsed = Game?.FlightSeconds ?? 0;
         if (phase == FlightPhase.Crashed) elapsed = CrashGame.SecondsFor(Game!.Multiplier);
@@ -134,13 +134,13 @@ public sealed class FlightScene : FrameworkElement, IDisposable
         }
         else
         {
-            double taxi = phase == FlightPhase.Countdown ? 8 * (1 - Game!.CountdownLeft / CrashGame.CountdownSeconds) : 0;
+            double progress = Game == null ? 0 : 1 - Game.BoardingLeft / CrashGame.BoardingSeconds;
+            double taxi = 8 * progress;
             var nose = new Point(55 + taxi, 146 + Math.Sin(t * 2.4) * 1.3);
             dc.DrawEllipse(Ink("#24FF5C74"), null, new Point(nose.X, 165), 37, 4);
-            DrawPlane(dc, nose, phase == FlightPhase.Countdown ? -3 : 0, t);
-            if (phase == FlightPhase.Countdown)
+            DrawPlane(dc, nose, progress > 0.8 ? -3 : 0, t);
+            if (Game != null)
             {
-                double progress = 1 - Game!.CountdownLeft / CrashGame.CountdownSeconds;
                 dc.DrawRoundedRectangle(Ink("#25364F"), null, new Rect(103, 113, 122, 3), 1.5, 1.5);
                 dc.DrawRoundedRectangle(Ink("#F8CD73"), null, new Rect(103, 113, 122 * progress, 3), 1.5, 1.5);
             }

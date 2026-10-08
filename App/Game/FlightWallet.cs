@@ -91,7 +91,7 @@ internal sealed class FlightWallet
         if (ticket.CashedAt > 0) return ticket.Payout;
         if (multiplier < 1 || multiplier >= ticket.CrashAt && !(multiplier == CrashGame.MaximumMultiplier && ticket.CrashAt == CrashGame.MaximumMultiplier))
             throw new InvalidOperationException("The plane has already flown away.");
-        decimal payout = decimal.Floor(ticket.Bet * multiplier * 100) / 100;
+        decimal payout = PayoutFor(ticket.Bet, multiplier);
         Commit(_state with
         {
             Balance = Math.Min(MaximumBalance, Balance + payout),
@@ -101,6 +101,19 @@ internal sealed class FlightWallet
     }
 
     public void Finish(Guid id) => Commit(WithResult(_state, RequireTicket(id)));
+
+    public static decimal PayoutFor(decimal bet, decimal multiplier) => decimal.Ceiling(bet * multiplier * 100) / 100;
+
+    public void RecordSpectatorFlight(decimal crashAt)
+    {
+        if (_state.Pending != null) throw new InvalidOperationException("A bet still needs to be settled.");
+        if (!ValidFlight(0, crashAt, 0, 0, allowSpectator: true))
+            throw new ArgumentOutOfRangeException(nameof(crashAt));
+        Commit(_state with
+        {
+            History = _state.History.Prepend(new FlightResult(crashAt, 0, 0, 0)).Take(8).ToList(),
+        });
+    }
 
     private FlightTicket RequireTicket(Guid id) => _state.Pending is { } ticket && ticket.Id == id
         ? ticket : throw new InvalidOperationException("This flight is no longer active.");
@@ -139,15 +152,17 @@ internal sealed class FlightWallet
             !DateTime.TryParseExact(state.LastGrantDay, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _) ||
             state.LastBet < 1 || state.LastBet > MaximumBalance || decimal.Round(state.LastBet, 2) != state.LastBet ||
             state.LastAutoCashout != 0 && (state.LastAutoCashout < 1.01m || state.LastAutoCashout > CrashGame.MaximumMultiplier) ||
-            state.History.Any(r => r == null || !ValidFlight(r.Bet, r.CrashAt, r.CashedAt, r.Payout)) ||
+            state.History.Any(r => r == null || !ValidFlight(r.Bet, r.CrashAt, r.CashedAt, r.Payout, allowSpectator: true)) ||
             state.Pending is { } p && (!ValidFlight(p.Bet, p.CrashAt, p.CashedAt, p.Payout) ||
                 p.AutoCashout != 0 && (p.AutoCashout < 1.01m || p.AutoCashout > CrashGame.MaximumMultiplier)))
             throw new InvalidDataException("The saved coin wallet is invalid. Its file has been preserved.");
     }
 
-    private static bool ValidFlight(decimal bet, decimal crashAt, decimal cashedAt, decimal payout)
-        => bet >= 1 && bet <= MaximumBalance && decimal.Round(bet, 2) == bet &&
+    private static bool ValidFlight(decimal bet, decimal crashAt, decimal cashedAt, decimal payout, bool allowSpectator = false)
+        => (bet >= 1 || allowSpectator && bet == 0 && cashedAt == 0) && bet <= MaximumBalance && decimal.Round(bet, 2) == bet &&
            crashAt >= 1 && crashAt <= CrashGame.MaximumMultiplier && decimal.Round(crashAt, 2) == crashAt &&
            cashedAt >= 0 && cashedAt <= crashAt &&
-           payout == (cashedAt == 0 ? 0 : decimal.Floor(bet * cashedAt * 100) / 100);
+           // Earlier versions rounded down. Preserve those saved results and
+           // pending payouts; only new cash-outs use upward cent rounding.
+           (cashedAt == 0 ? payout == 0 : payout == PayoutFor(bet, cashedAt) || payout == decimal.Floor(bet * cashedAt * 100) / 100);
 }

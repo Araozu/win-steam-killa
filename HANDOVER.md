@@ -97,7 +97,7 @@ Self-control grade (user keeps Admin): friction, not fortress.
 
 ## Verified so far
 - Flight Club verification (2026-10-08):
-  `dotnet test SteamTimer.slnx -c Release --verbosity minimal` — 29 passed;
+  `dotnet test SteamTimer.slnx -c Release --verbosity minimal` — 40 passed;
   `dotnet build SteamTimer.slnx -c Release` — 0 warnings/errors;
   Windows x64 app publish to `publish/App` succeeded. Native game-state,
   DPI-scaled, and scrollable-host screenshots inspected. Details and screenshot
@@ -116,14 +116,26 @@ Self-control grade (user keeps Admin): friction, not fortress.
 ## Current state / how to continue
 - **Flight Club minigame:** `App/Game/CrashGame.cs` owns monotonic round timing,
   crypto-sampled crash points, manual/auto cash-out, and the 100x flight cap.
+  Its loop is autonomous: Boarding (5s) -> Flying -> Crashed (5s) -> Boarding.
+  The final multiplier stays visible throughout the result display; spectator
+  outcome labels are omitted during boarding, flight, and the result display.
+  `Board` optionally attaches one bet without resetting takeoff; spectator
+  rounds cost nothing and are recorded with Bet=0. Bets never auto-repeat.
+  Actions validate their expected round ID to reject stale clicks. A long
+  suspension settles the current flight once, then gives a fresh boarding
+  window instead of replaying missed rounds.
   `FlightWallet.cs` atomically persists the per-user coin wallet at
   `%LOCALAPPDATA%\SteamTimer\flight-wallet.json` (not service state): 100 coins
   per 03:00 logical day, carry-over balance, no stacked offline grants, 8-round
   history. Stakes are saved before takeoff; restart recovers saved payouts and
   forfeits unpaid pending bets. Never reset a corrupt wallet silently.
+  New payouts round UP to the next cent via `PayoutFor`; existing round-down
+  saved results/pending payouts stay valid. The cash-out button always formats
+  gains with two decimals and tabular digits.
   `FlightGameView.xaml(.cs)` is embedded beneath the existing controls through
   `ElementHost`; `FlightScene.cs` draws the animated plane/sky/trail/effects via
-  WPF's Direct3D-backed compositor. The model timer continues while hidden;
+  WPF's Direct3D-backed compositor. The model timer runs every 50ms visible /
+  250ms hidden, including spectator rounds;
   composition callbacks detach while hidden/disposed. WPF is enabled alongside
   WinForms in `App.csproj`. MainForm is DPI-scaled and vertically scrollable.
   `Program.cs` uses a session-local mutex + activation event so subsequent
