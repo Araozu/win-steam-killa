@@ -1,26 +1,38 @@
 # SteamTimer — agent handover
 
 ## What this is
-Self-control Steam limiter for Windows. One timer per day, max **3h**
-(hard-coded, non-overridable), day resets at **03:00 local**. Warns at T-15m,
-kills Steam + launched games at deadline, keeps enforcing until 03:00.
-Survives reboot. Self-control grade (user keeps Admin): friction, not fortress.
+Self-control Steam limiter for Windows. Fully automatic (no manual timer):
+each logical day (03:00 local) has a base budget (M-F 1h30m, Sat 2h30m,
+Sun 4h) plus up to 30m leftover carried from the previous day. Sessions
+auto-start when Steam is seen, max 2h of daily budget each; after EVERY
+session a cooldown blocks Steam equal to that session's length rounded up to
+5 minutes. Warns at T-15m, kills Steam + launched games at deadline, keeps
+enforcing until 03:00. Survives reboot.
+Dota 2 has a separate 9h weekly budget (Mon 03:00 reset): Dota burns both
+budgets, but Dota exhaustion kills ONLY Dota — other games continue.
+Self-control grade (user keeps Admin): friction, not fortress.
 
 ## Layout (`C:\Users\Fernando\proj\steam-timer\`, git repo, `main`, no remote)
-- `Shared/` — `Limits.cs` (3h cap, 1m min, 15m warn, 03:00 reset, pipe name,
-  state path), `DurationParser.cs` (`1h`, `1h30m`, `90m`, `1:30`, bare = minutes),
-  `LogicalDay.cs`, `TimerState.cs` + pipe DTOs.
+- `Shared/` — `Limits.cs` (2h session max, 5m cooldown quantum, 30m carryover,
+   9h Dota week, 03:00 reset, pipe name, state path, 10m/95%/-7pp/0.1% borrow),
+  `LogicalDay.cs`,
+  `TimerState.cs` (v3 state + `GameRecord` identity log + pipe DTOs + borrow/
+  advance fields + `TomorrowBaseSeconds` for the cap).
+  (`DurationParser.cs` was deleted with the manual-start UI.)
 - `Service/` — .NET 10 Worker, runs as **LocalSystem** (`AddWindowsService`,
   name `SteamTimer`). `TimerEngine` owns state, `Worker` ticks every 15s,
   `Killer` kills by name + descendant-of-Steam tree (Toolhelp32 parent PIDs,
-  no NuGet), `PipeServer` = JSON-lines over named pipe `steamtimer`
-  (`start`/`status`). State: `C:\ProgramData\SteamTimer\state.json`.
-  Enforce loop: at most one kill pass per 60s after deadline, until 03:00 reset.
+  no NuGet) + Dota-only kill + single-snapshot play/Dota/game-identity view,
+  `PipeServer` = JSON-lines over named pipe `steamtimer` (`status`; retired
+  `start` answers "tracking is automatic"). State:
+  `C:\ProgramData\SteamTimer\state.json`. Enforce loop: at most one kill pass
+  per 60s after deadline / in cooldown (separate 60s throttle for Dota kills).
   Notes also go to the Windows Event Log (`SteamTimer` source).
-- `App/` — WinForms (`net10.0-windows`). `TrayContext` (ApplicationContext) is
-  the process root: tray icon + tooltip countdown + **owns all balloons** via
-  its own 15s `status` poll; single `MainForm` instance (`ShowMain`);
-  `MainForm` is display-only (presets, start, countdown), X hides to tray.
+- `App/` — WinForms (`net10.0-windows`), display-only. `TrayContext`
+  (ApplicationContext) is the process root: tray icon + tooltip countdown +
+  **owns all balloons** via its own 15s `status` poll (daily 15m/up, session
+  ending, cooldown start/over, Dota 15m/up); single `MainForm` instance
+  (`ShowMain`); `MainForm` shows daily/session/cooldown/Dota, X hides to tray.
 - `Setup/install.ps1` (Admin) — publishes, stops old service+tray and waits
   for exit, copies to `C:\Program Files\SteamTimer`, (re)creates service
   (auto + restart-on-failure), 5-min watchdog task (SYSTEM), HKCU Run entry,
@@ -28,11 +40,41 @@ Survives reboot. Self-control grade (user keeps Admin): friction, not fortress.
 - `README.md` — user-facing usage. Solution file is `SteamTimer.slnx`
   (new .slnx format — build with `dotnet build SteamTimer.slnx`).
 
+## Policy details (v3 engine)
+- Effective day budget = base(dow) + carryIn − advanceDeduction + borrowed,
+  carryIn = min(30m, max(0,
+  prevEffective - prevUsed)) only from the immediately previous logical day
+  (multi-day gaps => 0, and forgive borrow debt). Borrow = each press -10m
+  tomorrow, +(95% - 7pp per press, 0.1% floor) of 10m today (BorrowCount *
+  10m becomes tomorrow's
+  AdvanceDeductionSeconds); blocked on Sundays; capped so tomorrow's base never
+  goes below zero; repeatable. A mid-session press extends the CURRENT session
+  by today's gain (not the full 10m — that is tomorrow's loss), still capped by
+  the 2h session max; no restart, no extra cooldown. Borrow() has no Running
+  gate (works open/closed/cooldown); after full exhaustion a Steam relaunch is
+  needed for a fresh session. Impl: `Limits` (BorrowCost=10m, 95% first, -7pp,
+  0.1% floor; EffectivenessForBorrowNumber/BorrowGainForNumber/BorrowButtonText/
+  FormatGain), `TimerEngine.Borrow` + `Fill` (NextBorrowEffectiveness/
+  NextBorrowGainSeconds on the pipe DTO), one-click no-confirm UI in `MainForm`
+  (button heats toward red as effectiveness drops) + `TrayContext` (menu text
+  follows BorrowCount). Dota weekly usage carries across day rollovers inside
+  the same Mon-03:00 week; week guard also resets on mismatch. Fresh day
+  clears any cooldown (does not leak past 03:00).
+- Cooldown = `Limits.CooldownForSession(sessionLen)` = ceil(len/5m)*5m, min 5m
+  for any real session; zero-length flickers get none. While cooling, ticks
+  accrue nothing and Steam launches are killed.
+- Dota detection = any live `dota2` process (name match). Dota accrues the
+  weekly budget only while running; Dota kill = `KillDota` (dota roots +
+  children), throttled 60s, until Monday 03:00.
+- `GameHistory` in state logs each seen child exe (name, full path when
+  readable, total seconds, last seen; capped at 50) for future precise titles.
+- Old `state.json` (v1/v2) is discarded on load (version check != 3).
+
 ## Bugs already fixed (do not regress)
 1. **Start froze the UI**: `OnStart` blocked on
    `SendAsync().GetAwaiter().GetResult()` from the UI thread while awaits
-   captured that context. Now: `async void OnStart` + `await SendAsync`;
-   `PipeClient` uses `ConfigureAwait(false)`; sync `Send` hops via `Task.Run`.
+   captured that context. Now: no Start path at all (auto-tracked);
+   `PipeClient` still uses `ConfigureAwait(false)`; sync `Send` hops via `Task.Run`.
 2. **Server killed its own connections**: `using var server` in the accept loop
    disposed pipes mid-request. Now: ownership transfers to `HandleOneAsync`.
 3. **Pipe ACL**: SYSTEM service pipe unreachable from non-elevated UI. Now:
@@ -42,23 +84,37 @@ Survives reboot. Self-control grade (user keeps Admin): friction, not fortress.
    stops both, waits ≤20s, force-kills, then copies.
 5. **Popups only with window open**: balloons lived in `MainForm`. Now:
    `TrayContext.PollAsync` owns all notifications; X hides; Exit confirms.
+6. **Overflow crash killed notifications on Sundays**: `MainForm.RefreshCountdown`
+   used `Infinity` for "no manual cap" but then passed it to `Hm()`,
+   throwing `OverflowException` every second AND inside the tray poll.
+   Now: no Infinity flows (session remaining is always a real number);
+   both `Hm()`s still return "—" for NaN/Infinity instead of throwing;
+   tray poll wraps the form update in try/catch plus a catch-all so a form
+   bug can never stop balloons again.
 
 ## Verified so far
-- `dotnet build SteamTimer.slnx` clean (0 warn/error).
+- `dotnet build SteamTimer.slnx` clean (0 warn/error) — including after the v3
+  rework (2h sessions, len-based cooldown, 30m carryover, Dota 9h/week,
+  info-only UI).
 - Parser/day matrix via throwaway console project (since deleted):
   `5h` rejected, `1h30`→1:30, 02:00 counts as previous day, reset→next 03:00.
+  (Parser itself deleted with manual start; day logic unchanged.)
 - Freeze repro probe (temp WinForms app calling blocking `Send` on UI thread,
   since deleted): returns in ~2s, no deadlock. Note: probe returned null
   because the *old* service binary was still installed — full live roundtrip
   against the fixed service was never run from here (shell is non-elevated).
 
 ## Current state / how to continue
-- HEAD has the tray-notifier + installer fixes. **User must re-run
-  `Setup/install.ps1` as Admin to deploy them** (last deploy may predate fixes).
+- HEAD has the v3 automatic model. **User must re-run
+  `Setup/install.ps1` as Admin to deploy it** (deployed binary is still v2:
+  old state.json will be discarded on first v3 boot, Dota week starts fresh,
+  no carryover for the first day).
 - Shell here is non-elevated (medium integrity): you can build and commit,
   but cannot install/stop the service or write Program Files/ProgramData.
 - Never start a real timer in tests without backing up
-  `C:\ProgramData\SteamTimer\state.json` — a `start` burns the day's one timer.
+  `C:\ProgramData\SteamTimer\state.json` — with auto-tracking, just launching
+  Steam burns budget and starts cooldowns.
 - Open items / ideas: toast via `Microsoft.Toolkit.Uwp.Notifications` instead
   of balloon tips; IFEO/firewall hard-block as optional paranoid mode;
-  `5h rejected`-style UX polish; single-file self-contained publish.
+  resolving `GameHistory` exe names to real Steam titles (AppID lookup);
+  per-game budgets beyond Dota; single-file self-contained publish.

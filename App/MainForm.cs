@@ -2,15 +2,125 @@ using Shared;
 
 namespace App;
 
+// Display-only window: everything is auto-tracked by the service.
+// Three manual actions exist for clarity / emergencies:
+//   Recheck — ask the service what it sees RIGHT NOW (client/games/orphans).
+//   Force close — kill Steam + games now and stop the timer (normal cooldown
+//   for the time played still applies).
+//   Borrow — take 10m off tomorrow for 95% today, -7pp each further press
+//   (0.1% floor), one click, no confirm (repeatable, no Sundays). The button
+//   heats toward red as effectiveness drops.
+//
+// Top of the window is three time bars (remaining fills left-to-right, so the
+// right edge retreats toward 0 as time burns):
+//   Session (green, 2h max — turns red and drains during cooldown) /
+//   Today (green, base + carry) / Dota 2 week (red).
+// Remaining time lives INSIDE each bar; 0 / max scale sits right below it.
 public class MainForm : Form
 {
-    private readonly TextBox _input = new() { Width = 140, PlaceholderText = "e.g. 30m (session cap)" };
-    private readonly Button _start = new() { Text = "Cap this session", AutoSize = true };
-    private readonly Label _status = new() { AutoSize = true, MaximumSize = new Size(340, 0) };
-    private readonly FlowLayoutPanel _presets = new() { Dock = DockStyle.Top, Height = 40, Padding = new Padding(10) };
+    // Owner-drawn so we can do green/red fills + centered remaining text.
+    // WinForms ProgressBar can't do either with visual styles on.
+    private sealed class TimeBar : Control
+    {
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public double MaximumSeconds { get; set; } = 1;
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public double RemainingSeconds { get; set; } = 0;
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public Color FillColor { get; set; } = Color.FromArgb(0x2E, 0xA8, 0x42);
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public string DisplayText { get; set; } = "";
+
+        public TimeBar()
+        {
+            DoubleBuffered = true;
+            ResizeRedraw = true;
+            Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            var rect = ClientRectangle;
+            double max = MaximumSeconds <= 0 ? 1 : MaximumSeconds;
+            double frac = Math.Clamp(RemainingSeconds / max, 0, 1);
+            int fillW = (int)Math.Round(rect.Width * frac);
+
+            using (var bg = new SolidBrush(Color.FromArgb(0xE2, 0xE2, 0xE2)))
+                g.FillRectangle(bg, rect);
+            if (fillW > 0)
+            {
+                using var fill = new SolidBrush(FillColor);
+                g.FillRectangle(fill, 0, 0, fillW, rect.Height);
+            }
+            using (var pen = new Pen(Color.FromArgb(0x99, 0x99, 0x99)))
+                g.DrawRectangle(pen, 0, 0, rect.Width - 1, rect.Height - 1);
+
+            // Two-tone centered text: white over the fill, dark over the empty
+            // part, so it stays readable at any level (even near-empty).
+            string text = string.IsNullOrEmpty(DisplayText) ? "" : DisplayText;
+            if (text.Length > 0)
+            {
+                var fmt = new StringFormat
+                {
+                    Alignment = StringAlignment.Center,
+                    LineAlignment = StringAlignment.Center,
+                    Trimming = StringTrimming.EllipsisCharacter,
+                };
+                var full = new RectangleF(rect.X, rect.Y, rect.Width, rect.Height);
+                if (fillW > 0)
+                {
+                    g.SetClip(new Rectangle(0, 0, fillW, rect.Height));
+                    using var white = new SolidBrush(Color.White);
+                    g.DrawString(text, Font, white, full, fmt);
+                    g.ResetClip();
+                }
+                if (fillW < rect.Width)
+                {
+                    g.SetClip(new Rectangle(fillW, 0, rect.Width - fillW, rect.Height));
+                    using var dark = new SolidBrush(Color.FromArgb(0x33, 0x33, 0x33));
+                    g.DrawString(text, Font, dark, full, fmt);
+                    g.ResetClip();
+                }
+            }
+            base.OnPaint(e);
+        }
+    }
+
+    private static readonly Color SessionGreen = Color.FromArgb(0x2E, 0xA8, 0x42);
+    private static readonly Color DailyGreen = Color.FromArgb(0x1E, 0x8E, 0x3E);
+    private static readonly Color DotaRed = Color.FromArgb(0xD3, 0x2F, 0x2F);
+    private static readonly Color CooldownRed = Color.FromArgb(0xD3, 0x2F, 0x2F);
+
+    private const int BarWidth = 360;
+    private const int BarHeight = 26;
+
+    private readonly Label _sessionTitle = new() { AutoSize = true };
+    private readonly TimeBar _sessionBar = new() { FillColor = SessionGreen, Size = new Size(BarWidth, BarHeight) };
+    private readonly Label _sessionMin = new() { AutoSize = true, Text = "0", ForeColor = SystemColors.GrayText };
+    private readonly Label _sessionMax = new() { AutoSize = true, ForeColor = SystemColors.GrayText };
+
+    private readonly Label _dailyTitle = new() { AutoSize = true };
+    private readonly TimeBar _dailyBar = new() { FillColor = DailyGreen, Size = new Size(BarWidth, BarHeight) };
+    private readonly Label _dailyMin = new() { AutoSize = true, Text = "0", ForeColor = SystemColors.GrayText };
+    private readonly Label _dailyMax = new() { AutoSize = true, ForeColor = SystemColors.GrayText };
+
+    private readonly Label _dotaTitle = new() { AutoSize = true };
+    private readonly TimeBar _dotaBar = new() { FillColor = DotaRed, Size = new Size(BarWidth, BarHeight) };
+    private readonly Label _dotaMin = new() { AutoSize = true, Text = "0", ForeColor = SystemColors.GrayText };
+    private readonly Label _dotaMax = new() { AutoSize = true, ForeColor = SystemColors.GrayText };
+
+    private readonly Label _status = new() { AutoSize = true, MaximumSize = new Size(360, 0) };
+    private readonly Label _detail = new() { AutoSize = true, MaximumSize = new Size(360, 0), ForeColor = SystemColors.GrayText };
+    private readonly Button _recheckBtn = new() { Text = "Recheck now", AutoSize = true };
+    private readonly Button _killBtn = new() { Text = "Force close Steam + games", AutoSize = true };
+    private readonly Button _borrowBtn = new() { Text = "+10m from tomorrow (95% effective)", AutoSize = true, UseVisualStyleBackColor = false };
     private readonly System.Windows.Forms.Timer _uiTimer = new() { Interval = 1000 };
     private PipeResponse? _last;
     private DateTime _lastPollLocal = DateTime.Now;
+    private string? _lastNote;
+    private bool _serviceOk = true;
+    private bool _busy;
 
     public MainForm()
     {
@@ -19,18 +129,67 @@ public class MainForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(380, 260);
+        ClientSize = new Size(400, 700);
 
-        var mid = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, Padding = new Padding(10) };
-        mid.Controls.Add(_input);
-        mid.Controls.Add(_start);
-        _status.Padding = new Padding(10);
-        _status.Dock = DockStyle.Fill;
-        Controls.Add(_status);
-        Controls.Add(mid);
-        Controls.Add(_presets);
+        var body = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            AutoScroll = true,
+            Padding = new Padding(12),
+        };
 
-        _start.Click += OnStart;
+        body.Controls.Add(_sessionTitle);
+        body.Controls.Add(_sessionBar);
+        body.Controls.Add(ScaleRow(_sessionMin, _sessionMax));
+        body.Controls.Add(_dailyTitle);
+        body.Controls.Add(_dailyBar);
+        body.Controls.Add(ScaleRow(_dailyMin, _dailyMax));
+
+        var sep = new Panel
+        {
+            Size = new Size(BarWidth, 2),
+            BackColor = SystemColors.ControlDark,
+            Margin = new Padding(0, 8, 0, 8),
+        };
+        body.Controls.Add(sep);
+
+        body.Controls.Add(_dotaTitle);
+        body.Controls.Add(_dotaBar);
+        body.Controls.Add(ScaleRow(_dotaMin, _dotaMax));
+
+        _status.Margin = new Padding(0, 8, 0, 8);
+        _detail.Margin = new Padding(0, 0, 0, 8);
+        body.Controls.Add(_status);
+        body.Controls.Add(_detail);
+
+        var row = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            AutoSize = true,
+        };
+        _recheckBtn.Margin = new Padding(0, 0, 8, 0);
+        _recheckBtn.Click += async (_, _) => await RecheckAsync();
+        _killBtn.Click += async (_, _) => await ForceCloseAsync();
+        row.Controls.Add(_recheckBtn);
+        row.Controls.Add(_killBtn);
+        body.Controls.Add(row);
+
+        var row2 = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            AutoSize = true,
+        };
+        _borrowBtn.Margin = new Padding(0, 8, 0, 0);
+        _borrowBtn.Click += async (_, _) => await BorrowAsync();
+        row2.Controls.Add(_borrowBtn);
+        body.Controls.Add(row2);
+
+        Controls.Add(body);
+
         _uiTimer.Tick += (_, _) => RefreshCountdown();
         _uiTimer.Start();
         _ = SyncFromServiceAsync();
@@ -39,79 +198,185 @@ public class MainForm : Form
         sync.Start();
     }
 
-    private static string[] PresetsFor(int budgetSec) =>
-        budgetSec <= 5400 ? ["30m", "1h", "1h30m"]
-        : budgetSec <= 9000 ? ["30m", "1h", "1h30m", "2h30m"]
-        : ["1h", "1h30m", "2h", "3h"];
-
-    private void RebuildPresets(int budgetSec)
+    // "0" left, max right, right below its bar.
+    private static Panel ScaleRow(Label min, Label max)
     {
-        var want = PresetsFor(budgetSec);
-        var have = _presets.Controls.OfType<Button>().Select(b => b.Text).ToArray();
-        if (have.SequenceEqual(want)) return;
-        _presets.Controls.Clear();
-        foreach (var p in want)
+        var p = new Panel
         {
-            var b = new Button { Text = p, AutoSize = true };
-            b.Click += (_, _) => { _input.Text = p; };
-            _presets.Controls.Add(b);
-        }
+            Size = new Size(BarWidth, 16),
+            Margin = new Padding(0, 0, 0, 8),
+        };
+        min.Location = new Point(0, 0);
+        max.AutoSize = true;
+        // Right-align: park it, RefreshCountdown corrects the X once text is set.
+        max.Location = new Point(BarWidth - 60, 0);
+        max.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        p.Controls.Add(min);
+        p.Controls.Add(max);
+        return p;
     }
 
-    private async void OnStart(object? sender, EventArgs e)
+    private static void SetMaxLabel(Label l, string text)
     {
-        if (!DurationParser.TryParse(_input.Text, out var d, out var err))
-        {
-            MessageBox.Show(err, "Steam Timer", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
-        _start.Enabled = false;
-        _start.Text = "Starting...";
-        try
-        {
-            var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "start", Seconds = (int)d.TotalSeconds });
-            if (resp == null)
-            {
-                MessageBox.Show("Service not reachable. Is SteamTimer installed and running?\nRun Setup/install.ps1 as Administrator.",
-                    "Steam Timer", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-            if (!resp.Ok)
-            {
-                MessageBox.Show(resp.Error, "Steam Timer", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-            await SyncFromServiceAsync();
-        }
-        finally
-        {
-            _start.Text = "Cap this session";
-            _start.Enabled = _last == null || !_last.Enforcing;
-        }
+        l.Text = text;
+        // Keep it flush right under the 360px bar (no handle needed).
+        var w = TextRenderer.MeasureText(text, l.Font).Width;
+        l.Location = new Point(Math.Max(0, BarWidth - w), 0);
     }
 
     private async Task SyncFromServiceAsync()
     {
         var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "status" });
-        if (resp == null || !resp.Ok) return;
+        if (resp == null || !resp.Ok)
+        {
+            _serviceOk = false;
+            RefreshCountdown();
+            return;
+        }
+        _serviceOk = true;
         UpdateFromStatus(resp);
+    }
+
+    private async Task RecheckAsync()
+    {
+        if (_busy) return;
+        _busy = true;
+        _recheckBtn.Enabled = false;
+        try
+        {
+            var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "recheck" });
+            if (resp == null || !resp.Ok)
+            {
+                _serviceOk = false;
+                _lastNote = "Recheck failed — service unreachable. Is SteamTimer running?";
+                RefreshCountdown();
+                return;
+            }
+            _serviceOk = true;
+            _lastNote = resp.ActionNote;
+            UpdateFromStatus(resp, keepNote: true);
+        }
+        finally { _busy = false; _recheckBtn.Enabled = true; }
+    }
+
+    private async Task ForceCloseAsync()
+    {
+        if (_busy) return;
+        string what = _last != null && (_last.LiveClients.Count > 0 || _last.LiveGames.Count > 0 || _last.MatchedOrphans.Count > 0)
+            ? $"The service currently sees: {DescribeSeen(_last)}.\n\n"
+            : "";
+        var confirm = MessageBox.Show(
+            $"{what}Force-close Steam + detected games now? This stops the timer immediately " +
+            $"(the normal cooldown for the time played still applies).",
+            "Steam Timer — force close", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        if (confirm != DialogResult.Yes) return;
+        _busy = true;
+        _killBtn.Enabled = false;
+        try
+        {
+            var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "kill" }, timeoutMs: 15000);
+            if (resp == null || !resp.Ok)
+            {
+                _serviceOk = false;
+                _lastNote = "Force-close failed — service unreachable. Is SteamTimer running?";
+                RefreshCountdown();
+                MessageBox.Show(_lastNote, "Steam Timer", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            _serviceOk = true;
+            _lastNote = resp.ActionNote;
+            UpdateFromStatus(resp, keepNote: true);
+            MessageBox.Show(resp.ActionNote, "Steam Timer", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        finally { _busy = false; _killBtn.Enabled = true; }
+    }
+
+    // One click, no confirm, no success popup — the bars + button update.
+    // Errors (Sundays / tomorrow empty / service down) still show a dialog.
+    private async Task BorrowAsync()
+    {
+        if (_busy) return;
+        // Sunday pre-check (service is the source of truth and re-checks).
+        if (_last != null && DateTime.TryParse(_last.LogicalDay, out var ld) && ld.DayOfWeek == DayOfWeek.Sunday)
+        {
+            MessageBox.Show("Borrow is unavailable on Sundays — enjoy the 4h budget.",
+                "Steam Timer — borrow", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        _busy = true;
+        _borrowBtn.Enabled = false;
+        try
+        {
+            var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "borrow" }, timeoutMs: 15000);
+            if (resp == null)
+            {
+                _serviceOk = false;
+                _lastNote = "Borrow failed — service unreachable. Is SteamTimer running?";
+                RefreshCountdown();
+                MessageBox.Show(_lastNote, "Steam Timer", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            if (!resp.Ok)
+            {
+                _serviceOk = true;
+                _lastNote = resp.Error;
+                UpdateFromStatus(resp, keepNote: false);
+                _lastNote = resp.Error;
+                RefreshCountdown();
+                MessageBox.Show(resp.Error, "Steam Timer — borrow", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            _serviceOk = true;
+            _lastNote = null; // no success popup by design; detail line stays clean
+            UpdateFromStatus(resp, keepNote: false);
+        }
+        finally { _busy = false; _borrowBtn.Enabled = true; }
+    }
+
+    private static string DescribeSeen(PipeResponse r)
+    {
+        var bits = new List<string>();
+        if (r.LiveClients.Count > 0) bits.Add("client: " + string.Join(", ", r.LiveClients));
+        if (r.LiveGames.Count > 0) bits.Add("games: " + string.Join(", ", r.LiveGames));
+        if (r.MatchedOrphans.Count > 0) bits.Add("orphans: " + string.Join(", ", r.MatchedOrphans));
+        return bits.Count > 0 ? string.Join("; ", bits) : "nothing running";
     }
 
     private static string Hm(double totalSeconds)
     {
-        var t = TimeSpan.FromSeconds(Math.Max(0, totalSeconds));
+        // Never throw: a bad value must not kill the UI timer.
+        if (double.IsNaN(totalSeconds) || double.IsInfinity(totalSeconds)) return "—";
+        if (totalSeconds < 0) totalSeconds = 0;
+        if (totalSeconds > TimeSpan.MaxValue.TotalSeconds) totalSeconds = TimeSpan.MaxValue.TotalSeconds;
+        var t = TimeSpan.FromSeconds(totalSeconds);
         return $"{(int)t.TotalHours}h {t.Minutes:00}m";
+    }
+
+    // Precise countdown for the short cooldown bar (ticks every second).
+    // Hm() truncates to minutes, which would look frozen for a whole minute.
+    private static string FormatCooldown(double totalSeconds)
+    {
+        if (double.IsNaN(totalSeconds) || double.IsInfinity(totalSeconds)) return "—";
+        if (totalSeconds <= 0) return "0s";
+        if (totalSeconds < 60) return $"{(int)Math.Ceiling(totalSeconds)}s";
+        if (totalSeconds < 3600)
+        {
+            int m = (int)(totalSeconds / 60);
+            int s = (int)Math.Ceiling(totalSeconds - m * 60);
+            if (s == 60) { m++; s = 0; }
+            return $"{m}m {s:00}s";
+        }
+        return Hm(totalSeconds);
     }
 
     // Called by the tray poll too, so the window stays correct when hidden.
     // Display only — balloons are owned by TrayContext.
-    public void UpdateFromStatus(PipeResponse resp)
+    public void UpdateFromStatus(PipeResponse resp, bool keepNote = false)
     {
         _last = resp;
         _lastPollLocal = DateTime.Now;
-        RebuildPresets(resp.BudgetSeconds > 0 ? resp.BudgetSeconds : 5400);
-        _start.Enabled = !resp.Enforcing;
-        _input.Enabled = !resp.Enforcing;
+        _serviceOk = true;
+        if (!keepNote) _lastNote = string.IsNullOrWhiteSpace(resp.ActionNote) ? _lastNote : resp.ActionNote;
         RefreshCountdown();
     }
 
@@ -127,30 +392,202 @@ public class MainForm : Form
         base.OnFormClosing(e);
     }
 
+    // Button label + drama: regular face at 95%, heating toward red as the
+    // next press's effectiveness sinks to the 0.1% floor.
+    private void RefreshBorrowButton(PipeResponse r)
+    {
+        double eff = r.NextBorrowEffectiveness > 0
+            ? r.NextBorrowEffectiveness
+            : Limits.NextBorrowEffectiveness(r.BorrowCount);
+        _borrowBtn.Text = Limits.BorrowButtonText(r.BorrowCount);
+        double t = 1 - (eff - Limits.BorrowMinEffectiveness)
+            / (Limits.BorrowFirstEffectiveness - Limits.BorrowMinEffectiveness);
+        t = Math.Clamp(t, 0, 1);
+        var start = SystemColors.Control;
+        var end = Color.FromArgb(0xD3, 0x2F, 0x2F);
+        _borrowBtn.BackColor = Color.FromArgb(
+            (int)(start.R + (end.R - start.R) * t),
+            (int)(start.G + (end.G - start.G) * t),
+            (int)(start.B + (end.B - start.B) * t));
+        _borrowBtn.ForeColor = t > 0.5 ? Color.White : SystemColors.ControlText;
+    }
+
     private void RefreshCountdown()
     {
-        if (_last == null) return;
+        if (_last == null)
+        {
+            _sessionTitle.Text = "Session";
+            _sessionBar.MaximumSeconds = Limits.SessionMax.TotalSeconds;
+            _sessionBar.RemainingSeconds = 0;
+            _sessionBar.DisplayText = _serviceOk ? "waiting…" : "no service";
+            SetMaxLabel(_sessionMax, Hm(Limits.SessionMax.TotalSeconds));
+            _dailyTitle.Text = "Today";
+            _dailyBar.MaximumSeconds = 1;
+            _dailyBar.RemainingSeconds = 0;
+            _dailyBar.DisplayText = _serviceOk ? "waiting…" : "no service";
+            SetMaxLabel(_dailyMax, "—");
+            _dotaTitle.Text = "Dota 2 — this week";
+            _dotaBar.MaximumSeconds = Limits.DotaWeeklyBudget.TotalSeconds;
+            _dotaBar.RemainingSeconds = 0;
+            _dotaBar.DisplayText = _serviceOk ? "waiting…" : "no service";
+            SetMaxLabel(_dotaMax, Hm(Limits.DotaWeeklyBudget.TotalSeconds));
+            _status.Text = _serviceOk ? "Waiting for the service…" : "Service unreachable — is SteamTimer running?";
+            _detail.Text = _serviceOk ? "" : "Start the Windows service \"SteamTimer\", then hit Recheck now.";
+            return;
+        }
         var r = _last;
-        // Estimate live remaining between 15s polls while a session runs.
+        RefreshBorrowButton(r);
+        // Estimate live values between 15s polls while things run.
         double elapsed = (DateTime.Now - _lastPollLocal).TotalSeconds;
         double remaining = r.RemainingSeconds;
         if (r.Running && remaining > 0) remaining = Math.Max(0, remaining - elapsed);
-        double sessRem = r.SessionCapSeconds > 0 ? r.SessionRemainingSeconds : double.PositiveInfinity;
-        if (r.Running && r.SessionCapSeconds > 0) sessRem = Math.Max(0, sessRem - elapsed);
+        double sessRem = r.SessionRemainingSeconds;
+        if (r.Running) sessRem = Math.Max(0, sessRem - elapsed);
+        double sessElapsed = r.SessionElapsedSeconds + (r.Running ? elapsed : 0);
+        double dotaRem = r.DotaRemainingSeconds;
+        if (r.DotaRunning && dotaRem > 0) dotaRem = Math.Max(0, dotaRem - elapsed);
+
+        // ---- bars: remaining fills left-to-right, right edge sinks toward 0 ----
+        double sessionMax = r.SessionMaxSeconds > 0 ? r.SessionMaxSeconds : Limits.SessionMax.TotalSeconds;
+        double dailyMax = r.BudgetSeconds > 0 ? r.BudgetSeconds : 1;
+        double dotaMax = r.DotaBudgetSeconds > 0 ? r.DotaBudgetSeconds : Limits.DotaWeeklyBudget.TotalSeconds;
+
+        bool blocked = r.Enforcing || remaining <= 0;
+        bool cooling = !blocked && r.InCooldown;
+
+        double sessAvail;
+        string sessText;
+        Color sessColor = SessionGreen;
+        double sessMaxForBar = sessionMax;
+        string sessTitle;
+        string sessMaxText = Hm(sessionMax);
+        if (blocked)
+        {
+            sessAvail = 0;
+            sessText = "blocked";
+            sessTitle = r.Running
+                ? $"Session — {Hm(sessElapsed)} played"
+                : "Session — 2h max each";
+        }
+        else if (cooling)
+        {
+            // Red bar that drains as the cooldown ticks to 0 (1s UI timer).
+            double cd = Math.Max(0, r.CooldownRemainingSeconds - elapsed);
+            double total = r.CooldownTotalSeconds > 0
+                ? r.CooldownTotalSeconds
+                : Limits.CooldownForSession(TimeSpan.FromSeconds(r.LastSessionSeconds)).TotalSeconds;
+            if (total <= 0) total = Math.Max(cd, 1);
+            if (cd > total) total = cd;
+            sessAvail = cd;
+            sessMaxForBar = total;
+            sessColor = CooldownRed;
+            sessText = cd <= 0 ? "ready" : $"cooldown {FormatCooldown(cd)}";
+            sessTitle = cd <= 0
+                ? "Session — 2h max each"
+                : $"Session — cooldown {FormatCooldown(cd)} left";
+            sessMaxText = Hm(total);
+        }
+        else if (r.Running)
+        {
+            sessAvail = Math.Min(sessRem, remaining);
+            sessText = $"{Hm(sessAvail)} left";
+            sessTitle = $"Session — {Hm(sessElapsed)} played";
+        }
+        else
+        {
+            sessAvail = Math.Min(sessionMax, remaining);
+            sessText = sessAvail <= 0 ? "blocked" : $"{Hm(sessAvail)} ready";
+            sessTitle = "Session — 2h max each";
+        }
+
+        string dailyText = (r.Enforcing || remaining <= 0) ? "used up" : $"{Hm(remaining)} left";
+        string dotaText = r.DotaEnforcing ? "used up" : $"{Hm(dotaRem)} left";
+
+        _sessionTitle.Text = sessTitle;
+        _sessionBar.FillColor = sessColor;
+        _sessionBar.MaximumSeconds = sessMaxForBar;
+        _sessionBar.RemainingSeconds = sessAvail;
+        _sessionBar.DisplayText = sessText;
+        _sessionBar.Invalidate();
+        SetMaxLabel(_sessionMax, sessMaxText);
+
+        _dailyTitle.Text = $"Today — base {Hm(r.BaseBudgetSeconds)} + carry {Hm(r.CarryInSeconds)}" +
+            (r.BorrowedSeconds > 0 ? $" + borrow {Hm(r.BorrowedSeconds)}" : "") +
+            (r.AdvanceDeductionSeconds > 0 ? $" − advance {Hm(r.AdvanceDeductionSeconds)}" : "") +
+            $", used {Hm(r.UsedSeconds)}";
+        _dailyBar.MaximumSeconds = dailyMax;
+        _dailyBar.RemainingSeconds = remaining;
+        _dailyBar.DisplayText = dailyText;
+        _dailyBar.Invalidate();
+        SetMaxLabel(_dailyMax, Hm(dailyMax));
+
+        _dotaTitle.Text = $"Dota 2 — this week, used {Hm(r.DotaUsedSeconds)}";
+        _dotaBar.MaximumSeconds = dotaMax;
+        _dotaBar.RemainingSeconds = dotaRem;
+        _dotaBar.DisplayText = dotaText;
+        _dotaBar.Invalidate();
+        SetMaxLabel(_dotaMax, Hm(dotaMax));
+
+        // ---- kept text info below the bars ----
+        string resetLine = r.NextResetLocal == default
+            ? ""
+            : $"Daily reset at 03:00 (in {Hm((r.NextResetLocal - DateTime.Now).TotalSeconds)}).";
 
         if (r.Enforcing || remaining <= 0)
         {
-            _status.Text = $"Budget used up ({Hm(r.BudgetSeconds)} today). Back after 03:00.\nSteam is blocked until then — the service keeps enforcing.";
+            _status.Text =
+                $"Blocked — daily budget used up.\nSteam stays blocked until 03:00.\n" +
+                $"Dota: {Hm(dotaRem)} left this week.\n{resetLine}";
             TrayContext.Instance?.SetState("Steam blocked until 03:00", TimeSpan.Zero);
-            return;
         }
-        string state = r.Running ? "Playing — counting down" : "Paused — Steam closed, timer stopped";
-        string cap = r.SessionCapSeconds > 0
-            ? $"\nThis session ends in {Hm(sessRem)} (cap {Hm(r.SessionCapSeconds)})."
-            : "\nNo session cap — launch Steam and it tracks itself. Type e.g. 30m to cap this session.";
-        _status.Text = $"{state}.\nLeft today: {Hm(remaining)} of {Hm(r.BudgetSeconds)} (used {Hm(r.UsedSeconds)}).{cap}";
-        var left = TimeSpan.FromSeconds(remaining);
-        TrayContext.Instance?.SetState(
-            r.Running ? $"Steam: {Hm(remaining)} left today" : $"Paused: {Hm(remaining)} left today", left);
+        else if (r.InCooldown)
+        {
+            double cd = Math.Max(0, r.CooldownRemainingSeconds - elapsed);
+            string until = r.CooldownUntilUtc == default ? "" : $" (until {r.CooldownUntilUtc.ToLocalTime():HH:mm})";
+            _status.Text =
+                $"Cooldown — next session in {Hm(cd)}{until}.\nSteam stays blocked during cooldown.\n" +
+                $"Dota: {Hm(dotaRem)} left this week.\n{resetLine}";
+            TrayContext.Instance?.SetState($"Cooldown: {Hm(cd)} left", TimeSpan.Zero);
+        }
+        else
+        {
+            string state = r.Running ? "Playing — counting down" : "Paused — Steam closed, timer stopped";
+            string sessionLine = r.Running
+                ? $"This session ends in {Hm(sessAvail)}, then a cooldown."
+                : "No active session — launch Steam and it tracks itself (sessions max 2h, then a cooldown).";
+            string dotaState = r.DotaEnforcing
+                ? " Dota is blocked until Monday 03:00 (other games OK)."
+                : r.DotaRunning ? " Dota 2 is running (burns both budgets)." : "";
+            string dotaReset = r.DotaResetsLocal == default ? "" : $" Dota resets Monday 03:00.";
+            _status.Text = $"{state}.\n{sessionLine}\nDota: {Hm(dotaRem)} left this week.{dotaState}{dotaReset}\n{resetLine}";
+            var left = TimeSpan.FromSeconds(remaining);
+            string tip = (r.Running ? $"Steam: {Hm(remaining)} left today" : $"Paused: {Hm(remaining)} left today")
+                + (r.DotaEnforcing ? " • Dota done" : "");
+            TrayContext.Instance?.SetState(tip, left);
+        }
+
+        _detail.Text = BuildDetail(r, elapsed);
+    }
+
+    private string BuildDetail(PipeResponse r, double elapsed)
+    {
+        var lines = new List<string>();
+        if (!_serviceOk)
+            lines.Add("Service unreachable — showing last known state. Hit Recheck now.");
+        // Session state vs live detector: the two can legitimately differ for up
+        // to ~15s (service tick), which used to look like "it never stops".
+        string live = r.SteamRunning ? "sees Steam/games OPEN" : "sees nothing open";
+        string sess = r.Running ? "session OPEN (accruing)" : r.InCooldown ? "in cooldown (blocked)" : "no session (stopped)";
+        lines.Add($"Detector {live}; timer {sess}.");
+        lines.Add("Seen now: " + DescribeSeen(r) + ".");
+        if (r.RememberedGames.Count > 0)
+            lines.Add("Remembered (orphan fallback): " + string.Join(", ", r.RememberedGames) + ".");
+        else
+            lines.Add("Remembered: none.");
+        int age = Math.Max(0, (int)elapsed);
+        lines.Add($"Last poll {age}s ago — Recheck asks the service right now.");
+        if (!string.IsNullOrWhiteSpace(_lastNote))
+            lines.Add(_lastNote!);
+        return string.Join("\n", lines);
     }
 }

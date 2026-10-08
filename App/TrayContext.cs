@@ -3,19 +3,27 @@ using Shared;
 namespace App;
 
 // Always-running notifier: polls the service itself every 15s and raises the
-// 15-minute + time-up balloons whether or not the main window is open.
+// 15-minute + time-up + cooldown + Dota balloons whether or not the main
+// window is open.
 public class TrayContext : ApplicationContext
 {
     public static TrayContext? Instance { get; private set; }
     private readonly NotifyIcon _icon = new();
     private readonly System.Windows.Forms.Timer _poll = new() { Interval = 15000 };
     private MainForm? _form;
+    private ToolStripMenuItem? _borrowMenuItem;
     private bool _polling;
     private string? _seenDay;
     private bool _warned;
     private bool _enforceTold;
-    private string? _seenCapKey;
-    private bool _capWarned;
+    private string? _seenSessionKey;
+    private bool _sessionWarned;
+    private string? _seenCooldownKey;
+    private bool _cooldownTold;
+    private bool _wasCooldown;
+    private string? _seenDotaWeek;
+    private bool _dotaWarned;
+    private bool _dotaTold;
 
     public TrayContext()
     {
@@ -25,6 +33,11 @@ public class TrayContext : ApplicationContext
         _icon.Visible = true;
         var menu = new ContextMenuStrip();
         menu.Items.Add("Open", null, (_, _) => ShowMain());
+        menu.Items.Add("Recheck now (ask service what is open)", null, async (_, _) => await RecheckAsync());
+        menu.Items.Add("Force close Steam + games (stop timer)", null, async (_, _) => await ForceCloseAsync());
+        _borrowMenuItem = new ToolStripMenuItem(Limits.BorrowButtonText(0));
+        _borrowMenuItem.Click += async (_, _) => await BorrowAsync();
+        menu.Items.Add(_borrowMenuItem);
         menu.Items.Add("Exit tray (timer keeps running, popups stop)", null, (_, _) =>
         {
             var r = MessageBox.Show(
@@ -55,7 +68,12 @@ public class TrayContext : ApplicationContext
 
     private static string Hm(double totalSeconds)
     {
-        var t = TimeSpan.FromSeconds(Math.Max(0, totalSeconds));
+        // Never throw: a bad payload must not kill the poll loop (that would
+        // silently stop all balloon notifications).
+        if (double.IsNaN(totalSeconds) || double.IsInfinity(totalSeconds)) return "—";
+        if (totalSeconds < 0) totalSeconds = 0;
+        if (totalSeconds > TimeSpan.MaxValue.TotalSeconds) totalSeconds = TimeSpan.MaxValue.TotalSeconds;
+        var t = TimeSpan.FromSeconds(totalSeconds);
         return $"{(int)t.TotalHours}h {t.Minutes:00}m";
     }
 
@@ -67,14 +85,25 @@ public class TrayContext : ApplicationContext
         {
             var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "status" });
             if (resp == null || !resp.Ok) return;
-            _form?.UpdateFromStatus(resp);
+            // The form is display-only: its bugs must never take down the poll
+            // loop that owns all balloon notifications.
+            try { _form?.UpdateFromStatus(resp); } catch { }
+            try { if (_borrowMenuItem != null) _borrowMenuItem.Text = Limits.BorrowButtonText(resp.BorrowCount); } catch { }
             if (resp.LogicalDay != _seenDay)
             {
                 _seenDay = resp.LogicalDay;
                 _warned = false;
                 _enforceTold = false;
-                _seenCapKey = null;
-                _capWarned = false;
+                _seenSessionKey = null;
+                _sessionWarned = false;
+                _seenCooldownKey = null;
+                _cooldownTold = false;
+            }
+            if (resp.DotaWeekStart != _seenDotaWeek)
+            {
+                _seenDotaWeek = resp.DotaWeekStart;
+                _dotaWarned = false;
+                _dotaTold = false;
             }
             if (resp.Enforcing || resp.RemainingSeconds <= 0)
             {
@@ -84,29 +113,79 @@ public class TrayContext : ApplicationContext
                     _enforceTold = true;
                     Balloon("Steam time is up", "Daily budget used. Blocked until 03:00.");
                 }
+                _wasCooldown = false;
                 return;
             }
-            var left = TimeSpan.FromSeconds(resp.RemainingSeconds);
-            SetState(resp.Running ? $"Steam: {Hm(resp.RemainingSeconds)} left" : $"Paused: {Hm(resp.RemainingSeconds)} left", left);
+            if (resp.InCooldown)
+            {
+                SetState($"Cooldown: {Hm(resp.CooldownRemainingSeconds)} left", TimeSpan.Zero);
+                var key = resp.LogicalDay + "|cd|" + resp.CooldownUntilUtc.Ticks;
+                if (key != _seenCooldownKey) { _seenCooldownKey = key; _cooldownTold = false; }
+                if (!_cooldownTold)
+                {
+                    _cooldownTold = true;
+                    string until = resp.CooldownUntilUtc == default ? "" : $" Next session after {resp.CooldownUntilUtc.ToLocalTime():HH:mm}.";
+                    Balloon("Cooldown — Steam blocked", $"{Hm(resp.CooldownRemainingSeconds)} until the next session.{until}");
+                }
+                _wasCooldown = true;
+                return;
+            }
+            if (_wasCooldown)
+            {
+                _wasCooldown = false;
+                Balloon("Cooldown over", "You can play again.");
+            }
+            double remSafe = double.IsNaN(resp.RemainingSeconds) || double.IsInfinity(resp.RemainingSeconds) ? 0 : Math.Max(0, resp.RemainingSeconds);
+            var left = TimeSpan.FromSeconds(Math.Min(remSafe, TimeSpan.MaxValue.TotalSeconds));
+            string tip = (resp.Running ? $"Steam: {Hm(resp.RemainingSeconds)} left" : $"Paused: {Hm(resp.RemainingSeconds)} left")
+                + (resp.DotaEnforcing ? " • Dota done" : "");
+            bool sessionEnding = resp.SessionRemainingSeconds < resp.RemainingSeconds &&
+                resp.SessionRemainingSeconds <= Limits.WarnBefore.TotalSeconds && resp.SessionRemainingSeconds > 0;
+            bool dotaLow = resp.DotaRunning && !resp.DotaEnforcing &&
+                resp.DotaRemainingSeconds <= Limits.WarnBefore.TotalSeconds && resp.DotaRemainingSeconds > 0;
+            // Icon: warning under 30m daily. A session/Dota ending soon also
+            // deserves the warning icon even with plenty of daily budget left
+            // (the TimeSpan only drives the icon; the tooltip text is fixed).
+            var iconLeft = (sessionEnding || dotaLow) && left > TimeSpan.FromMinutes(30)
+                ? TimeSpan.FromMinutes(29)
+                : left;
+            SetState(tip, iconLeft);
             if (resp.RemainingSeconds <= Limits.WarnBefore.TotalSeconds && !_warned)
             {
                 _warned = true;
                 Balloon("Steam closes in 15 minutes", $"{Hm(resp.RemainingSeconds)} of today's budget left. Save your game.");
             }
-            // Session-cap warning: only when the cap is tighter than the budget.
-            if (resp.SessionCapSeconds > 0 && resp.SessionRemainingSeconds < resp.RemainingSeconds &&
-                resp.SessionRemainingSeconds <= Limits.WarnBefore.TotalSeconds && resp.SessionRemainingSeconds > 0)
+            // Session warning: the 2h session max, when tighter than the budget.
+            if (sessionEnding)
             {
-                var key = resp.LogicalDay + "|" + resp.SessionCapSeconds + "|" + resp.StartUtc.Ticks;
-                if (key != _seenCapKey) { _seenCapKey = key; _capWarned = false; }
-                if (!_capWarned)
+                var key = resp.LogicalDay + "|" + resp.StartUtc.Ticks;
+                if (key != _seenSessionKey) { _seenSessionKey = key; _sessionWarned = false; }
+                if (!_sessionWarned)
                 {
-                    _capWarned = true;
-                    Balloon("Session cap ending", $"This session ends in {Hm(resp.SessionRemainingSeconds)}. Close Steam to pause the budget.");
+                    _sessionWarned = true;
+                    Balloon("Session ending", $"This session ends in {Hm(resp.SessionRemainingSeconds)}, then a cooldown. Save your game.");
                 }
             }
-            else { _seenCapKey = null; _capWarned = false; }
+            else { _seenSessionKey = null; _sessionWarned = false; }
+            // Dota weekly budget: kills only Dota, other games continue.
+            if (resp.DotaEnforcing)
+            {
+                if (!_dotaTold)
+                {
+                    _dotaTold = true;
+                    Balloon("Dota 2 time is up", "Weekly Dota budget used. Dota is blocked until Monday 03:00; other games continue.");
+                }
+            }
+            else if (dotaLow)
+            {
+                if (!_dotaWarned)
+                {
+                    _dotaWarned = true;
+                    Balloon("Dota 2 closes in 15 minutes", $"{Hm(resp.DotaRemainingSeconds)} of the weekly Dota budget left. Other games are unaffected.");
+                }
+            }
         }
+        catch { } // a bad payload must never kill the notification loop
         finally { _polling = false; }
     }
 
@@ -122,5 +201,56 @@ public class TrayContext : ApplicationContext
     public void Balloon(string title, string body)
     {
         try { _icon.ShowBalloonTip(8000, title, body, ToolTipIcon.Warning); } catch { }
+    }
+
+    private bool _acting;
+
+    private async Task RecheckAsync()
+    {
+        if (_acting) return;
+        _acting = true;
+        try
+        {
+            var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "recheck" });
+            if (resp == null || !resp.Ok) { Balloon("Recheck failed", "Service unreachable. Is SteamTimer running?"); return; }
+            try { _form?.UpdateFromStatus(resp); } catch { }
+            Balloon("Recheck", string.IsNullOrWhiteSpace(resp.ActionNote) ? "Done." : resp.ActionNote);
+        }
+        finally { _acting = false; }
+    }
+
+    private async Task ForceCloseAsync()
+    {
+        if (_acting) return;
+        var confirm = MessageBox.Show(
+            "Force-close Steam + detected games now? This stops the timer immediately " +
+            "(the normal cooldown for the time played still applies).",
+            "Steam Timer — force close", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        if (confirm != DialogResult.Yes) return;
+        _acting = true;
+        try
+        {
+            var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "kill" }, timeoutMs: 15000);
+            if (resp == null || !resp.Ok) { Balloon("Force-close failed", "Service unreachable. Is SteamTimer running?"); return; }
+            try { _form?.UpdateFromStatus(resp); } catch { }
+            Balloon("Force close", string.IsNullOrWhiteSpace(resp.ActionNote) ? $"Closed {resp.KilledProcesses} process(es)." : resp.ActionNote);
+        }
+        finally { _acting = false; }
+    }
+
+    // One click, no confirm, no success balloon — errors still balloon.
+    private async Task BorrowAsync()
+    {
+        if (_acting) return;
+        _acting = true;
+        try
+        {
+            var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "borrow" }, timeoutMs: 15000);
+            if (resp == null) { Balloon("Borrow failed", "Service unreachable. Is SteamTimer running?"); return; }
+            if (!resp.Ok) { Balloon("Borrow unavailable", resp.Error); try { _form?.UpdateFromStatus(resp); } catch { } return; }
+            try { _form?.UpdateFromStatus(resp); } catch { }
+            try { if (_borrowMenuItem != null) _borrowMenuItem.Text = Limits.BorrowButtonText(resp.BorrowCount); } catch { }
+        }
+        finally { _acting = false; }
     }
 }
