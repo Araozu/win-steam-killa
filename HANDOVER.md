@@ -44,7 +44,7 @@ Self-control grade (user keeps Admin): friction, not fortress.
 - `FLIGHT_CLUB.md` — complete minigame usage and implementation guide.
 
 ## Policy details (v3 engine)
-- Effective day budget = base(dow) + carryIn − advanceDeduction + borrowed,
+- Effective day budget = base(dow) + carryIn − advanceDeduction + borrowed + coinBudget,
   carryIn = min(30m, max(0,
   prevEffective - prevUsed)) only from the immediately previous logical day
   (multi-day gaps => 0, and forgive borrow debt). Borrow = each press -10m
@@ -97,10 +97,10 @@ Self-control grade (user keeps Admin): friction, not fortress.
 
 ## Verified so far
 - Flight Club verification (2026-10-08):
-  `dotnet test SteamTimer.slnx -c Release --verbosity minimal` — 40 passed;
+  `dotnet test SteamTimer.slnx -c Release --verbosity minimal` — 65 passed;
   `dotnet build SteamTimer.slnx -c Release` — 0 warnings/errors;
-  Windows x64 app publish to `publish/App` succeeded. Native game-state,
-  DPI-scaled, and scrollable-host screenshots inspected. Details and screenshot
+  Windows x64 app/service publishes to `publish/App` and `publish/Service`
+  succeeded. Native game-state, DPI-scaled, and scrollable-host screenshots inspected. Details and screenshot
   capture commands are in `FLIGHT_CLUB.md`.
 - `dotnet build SteamTimer.slnx` clean (0 warn/error) — including after the v3
   rework (2h sessions, len-based cooldown, 30m carryover, Dota 9h/week,
@@ -132,16 +132,29 @@ Self-control grade (user keeps Admin): friction, not fortress.
   New payouts round UP to the next cent via `PayoutFor`; existing round-down
   saved results/pending payouts stay valid. The cash-out button always formats
   gains with two decimals and tabular digits.
+  The wallet journals one `PendingExchange` with a stable `ExchangeWalletId`
+  and sequential number; sale coins are reserved before sending. The service
+  saves `CoinBudgetSeconds` and its latest `CoinExchanges` receipt per wallet
+  together, before replying. Receipts survive day reset, preventing duplicate
+  changes after lost replies or restarts. Rejected sales refund reserved coins.
+  Sell 1 coin for +60s today; buy 10 coins for -660s of remaining time today.
+  Trades do not change played time, tomorrow's debt, session/cooldown, or Dota.
+  A zero effective budget must never fall back to the base for carryover.
   `FlightGameView.xaml(.cs)` is embedded beneath the existing controls through
   `ElementHost`; `FlightScene.cs` draws the animated plane/sky/trail/effects via
-  WPF's Direct3D-backed compositor. The model timer runs every 50ms visible /
-  250ms hidden, including spectator rounds;
-  composition callbacks detach while hidden/disposed. WPF is enabled alongside
-  WinForms in `App.csproj`. MainForm is DPI-scaled and vertically scrollable.
+  WPF's Direct3D-backed compositor. MainForm activation/deactivation drives a
+  2-minute idle grace period. The game then freezes its clock and bet, stops
+  its model timer, and detaches composition callbacks; focusing resumes the
+  same round. The service continues running. Before idle-pause, the model timer
+  runs every 50ms visible / 250ms hidden, including spectator rounds;
+  composition callbacks also detach immediately while hidden/disposed. WPF is
+  enabled alongside WinForms in `App.csproj`. MainForm is DPI-scaled and vertically scrollable.
   `Program.cs` uses a session-local mutex + activation event so subsequent
   launches open the existing window instead of creating competing wallets.
 - **Verification:** `dotnet test SteamTimer.slnx` runs the xUnit `Tests/` project,
-  including isolated wallet/round tests and an STA native UI/rendering test.
+  including isolated wallet/round and service exchange tests and STA native
+  UI/rendering/idle-pause tests. Service tests use a temporary `StateStore` and
+  injected clock; never construct their engine with the real state path.
   Optional `STEAMTIMER_TEST_SCREENSHOTS` saves PNG evidence. No Steam launch or
   real wallet writes occur in tests.
 - HEAD has the v3 automatic timer model and Flight Club. **Run

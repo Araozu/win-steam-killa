@@ -161,6 +161,11 @@ public class MainForm : Form
     internal MainForm(CrashGame? game)
     {
         _flightGame = new FlightGameView(game);
+        _flightGame.BudgetChanged += response => UpdateFromStatus(response);
+        _flightGame.SetAppFocused(false);
+        Activated += (_, _) => _flightGame.SetAppFocused(true);
+        Deactivate += (_, _) => _flightGame.SetAppFocused(false);
+        VisibleChanged += (_, _) => { if (!Visible) _flightGame.SetAppFocused(false); };
         AutoScaleDimensions = new SizeF(96, 96);
         AutoScaleMode = AutoScaleMode.Dpi;
         Text = "Steam Timer";
@@ -254,7 +259,7 @@ public class MainForm : Form
         var flightHost = new ElementHost
         {
             Child = _flightGame,
-            Size = new Size(BarWidth, 438),
+            Size = new Size(BarWidth, FlightGameView.PanelHeight),
             Margin = new Padding(0, 14, 0, 0),
             TabStop = true,
         };
@@ -479,6 +484,7 @@ public class MainForm : Form
     // Display only — balloons are owned by TrayContext.
     public void UpdateFromStatus(PipeResponse resp, bool keepNote = false)
     {
+        if (IsDisposed || _last != null && resp.ServerNowUtc < _last.ServerNowUtc) return;
         _last = resp;
         _lastPollLocal = DateTime.Now;
         _serviceOk = true;
@@ -530,6 +536,7 @@ public class MainForm : Form
 
     private void RefreshCountdown()
     {
+        _flightGame.SetBudgetStatus(_serviceOk ? _last : null);
         if (_last == null)
         {
             _sessionTitle.Text = "Session";
@@ -687,6 +694,7 @@ public class MainForm : Form
         _todayDetailLabel.Text = $"Budget {Hm(dailyMax)} total\nBase {Hm(r.BaseBudgetSeconds)} + carry {Hm(r.CarryInSeconds)}" +
             (r.BorrowedSeconds > 0 ? $" + borrow {Hm(r.BorrowedSeconds)}" : "") +
             (r.AdvanceDeductionSeconds > 0 ? $" − advance {Hm(r.AdvanceDeductionSeconds)}" : "") +
+            (r.CoinBudgetSeconds != 0 ? $" {(r.CoinBudgetSeconds > 0 ? "+" : "−")} coins {Limits.FormatGain(TimeSpan.FromSeconds(Math.Abs((double)r.CoinBudgetSeconds)))}" : "") +
             $"\nUsed {Hm(r.UsedSeconds)}, left {Hm(remaining)}";
 
         _detectorLabel.Text = r.SteamRunning ? "Detector: Steam detected" : "Detector: nothing detected";

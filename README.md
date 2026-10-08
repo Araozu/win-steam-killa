@@ -45,7 +45,7 @@ After the budget is used, kills Steam + games and keeps enforcing until 03:00.
 
 ## Flight Club
 
-An Aviator-style, coin-only crash game sits below the timer controls. The red
+An Aviator-style crash game sits below the timer controls. The red
 propeller plane takes off, a multiplier climbs, and you try to cash out before
 it flies away. The animated sky, plane, glowing trail, and effects use WPF's
 Direct3D-backed graphics inside the WinForms window; no extra graphics runtime
@@ -66,14 +66,23 @@ or asset downloads are needed.
   The button shows exactly **two decimal places** with tabular digits.
   The flight continues after you cash out so you can see its final multiplier.
   Recent flights have tooltips showing your bet and payout.
-- Closing to the tray keeps the flight loop running. Exiting/restarting retains
-  any saved payout; an unsettled bet is lost. Coins and history are saved in
+- **Sell 1 coin → add 1 minute to today's budget.** **Buy 10 coins → spend
+  11 minutes of today's remaining budget.** The buttons below the game update
+  the coin balance and Today bar immediately. Trades require the updated Windows
+  service; held bets cannot be sold, and you cannot spend time already played.
+  Saved transactions recover after a timeout or restart without double charges.
+- After **2 minutes without app focus**, the game pauses its clock, stops its
+  update timer, and detaches rendering. Returning resumes the same countdown or
+  flight. This also applies when hidden in the tray; the timer service keeps running.
+- Exiting/restarting retains any saved payout; an unsettled bet is lost.
+  Coins and history are saved in
   `%LOCALAPPDATA%\SteamTimer\flight-wallet.json`, separately from timer state.
 - Outcomes use cryptographic randomness with a 97% survival curve
   (`floor(0.97 / (1 - U) × 100) / 100`, clamped to 1–100×).
 
-The window scrolls on smaller desktops, and the game works independently of
-the Windows service. Coin bets never change your Steam or Dota time budgets.
+The window scrolls on smaller desktops. Flights work without the Windows service;
+coin/time trades need it. Trades change today's Steam budget; the 2-hour session
+cap, normal cooldowns, and Dota's weekly budget still apply.
 
 See the [Flight Club guide](FLIGHT_CLUB.md) for controls, timing rules,
 wallet recovery, graphics architecture, and build/test instructions.

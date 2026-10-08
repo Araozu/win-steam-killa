@@ -5,10 +5,16 @@ namespace Service;
 
 public class StateStore
 {
-    private readonly string _dir = Limits.StateDir;
-    private readonly string _file = Limits.StateFile;
+    private readonly string _dir;
+    private readonly string _file;
     private readonly object _lock = new();
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
+
+    public StateStore(string? path = null)
+    {
+        _file = path ?? Limits.StateFile;
+        _dir = Path.GetDirectoryName(Path.GetFullPath(_file))!;
+    }
 
     public TimerState? Load()
     {
@@ -30,8 +36,16 @@ public class StateStore
         {
             Directory.CreateDirectory(_dir);
             var tmp = _file + ".tmp";
-            File.WriteAllText(tmp, JsonSerializer.Serialize(state, JsonOpts));
-            File.Move(tmp, _file, overwrite: true);
+            try
+            {
+                using (var file = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
+                {
+                    JsonSerializer.Serialize(file, state, JsonOpts);
+                    file.Flush(flushToDisk: true);
+                }
+                File.Move(tmp, _file, overwrite: true);
+            }
+            finally { if (File.Exists(tmp)) File.Delete(tmp); }
         }
     }
 

@@ -17,9 +17,13 @@ internal sealed record FlightWalletState
     public decimal LastAutoCashout { get; init; }
     public FlightTicket? Pending { get; init; }
     public List<FlightResult> History { get; init; } = [];
+    public Guid ExchangeWalletId { get; init; } = Guid.NewGuid();
+    public long ExchangeNumber { get; init; }
+    public CoinExchangeRequest? PendingExchange { get; init; }
 }
 
-// Separate from the service's time budget. A stake is durably deducted BEFORE
+// The service owns time; this wallet owns coins and journals their exchanges.
+// A stake is durably deducted BEFORE
 // takeoff; an interrupted flight stays paid/lost rather than refunding a restart.
 internal sealed class FlightWallet
 {
@@ -33,6 +37,10 @@ internal sealed class FlightWallet
     public decimal LastBet => _state.LastBet;
     public decimal LastAutoCashout => _state.LastAutoCashout;
     public IReadOnlyList<FlightResult> History => _state.History;
+    public CoinExchangeRequest? PendingExchange => _state.PendingExchange;
+    // Preserve room for a pending purchase or refund, even if a flight pays out.
+    private decimal BalanceCap => MaximumBalance - (_state.PendingExchange is { } exchange
+        ? exchange.BuyCoins ? CoinExchangeRates.BoughtCoins : CoinExchangeRates.SoldCoins : 0);
 
     public static string DefaultPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -65,7 +73,7 @@ internal sealed class FlightWallet
         if (string.CompareOrdinal(day, _state.LastGrantDay) <= 0) return false;
         Commit(_state with
         {
-            Balance = Math.Min(MaximumBalance, _state.Balance + DailyCoins),
+            Balance = Math.Min(BalanceCap, _state.Balance + DailyCoins),
             LastGrantDay = day,
         });
         return true;
@@ -94,7 +102,7 @@ internal sealed class FlightWallet
         decimal payout = PayoutFor(ticket.Bet, multiplier);
         Commit(_state with
         {
-            Balance = Math.Min(MaximumBalance, Balance + payout),
+            Balance = Math.Min(BalanceCap, Balance + payout),
             Pending = ticket with { CashedAt = multiplier, Payout = payout },
         });
         return payout;
@@ -103,6 +111,37 @@ internal sealed class FlightWallet
     public void Finish(Guid id) => Commit(WithResult(_state, RequireTicket(id)));
 
     public static decimal PayoutFor(decimal bet, decimal multiplier) => decimal.Ceiling(bet * multiplier * 100) / 100;
+
+    public CoinExchangeRequest BeginExchange(bool buyCoins, DateTime localNow)
+    {
+        if (PendingExchange != null) throw new InvalidOperationException("An exchange is still pending.");
+        if (buyCoins && Balance > MaximumBalance - CoinExchangeRates.BoughtCoins)
+            throw new InvalidOperationException("The coin wallet is full.");
+        if (!buyCoins && Balance < CoinExchangeRates.SoldCoins)
+            throw new InvalidOperationException("You need at least 1 available coin to sell.");
+        var request = new CoinExchangeRequest(_state.ExchangeWalletId, checked(_state.ExchangeNumber + 1),
+            LogicalDay.ForLocal(localNow), buyCoins);
+        Commit(_state with
+        {
+            Balance = Balance - (buyCoins ? 0 : CoinExchangeRates.SoldCoins),
+            PendingExchange = request,
+        });
+        return request;
+    }
+
+    public void CompleteExchange(CoinExchangeReceipt receipt)
+    {
+        if (PendingExchange is not { } pending || pending != receipt.Request)
+            throw new InvalidOperationException("The exchange receipt does not match the pending trade.");
+        decimal credit = receipt.Applied && pending.BuyCoins ? CoinExchangeRates.BoughtCoins
+            : !receipt.Applied && !pending.BuyCoins ? CoinExchangeRates.SoldCoins : 0;
+        Commit(_state with
+        {
+            Balance = Balance + credit,
+            ExchangeNumber = pending.Number,
+            PendingExchange = null,
+        });
+    }
 
     public void RecordSpectatorFlight(decimal crashAt)
     {
@@ -154,7 +193,12 @@ internal sealed class FlightWallet
             state.LastAutoCashout != 0 && (state.LastAutoCashout < 1.01m || state.LastAutoCashout > CrashGame.MaximumMultiplier) ||
             state.History.Any(r => r == null || !ValidFlight(r.Bet, r.CrashAt, r.CashedAt, r.Payout, allowSpectator: true)) ||
             state.Pending is { } p && (!ValidFlight(p.Bet, p.CrashAt, p.CashedAt, p.Payout) ||
-                p.AutoCashout != 0 && (p.AutoCashout < 1.01m || p.AutoCashout > CrashGame.MaximumMultiplier)))
+                p.AutoCashout != 0 && (p.AutoCashout < 1.01m || p.AutoCashout > CrashGame.MaximumMultiplier)) ||
+            state.ExchangeWalletId == Guid.Empty || state.ExchangeNumber < 0 ||
+            state.PendingExchange is { } exchange && (exchange.WalletId != state.ExchangeWalletId ||
+                state.ExchangeNumber == long.MaxValue || exchange.Number != state.ExchangeNumber + 1 ||
+                !DateTime.TryParseExact(exchange.LogicalDay, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _) ||
+                state.Balance > MaximumBalance - (exchange.BuyCoins ? CoinExchangeRates.BoughtCoins : CoinExchangeRates.SoldCoins)))
             throw new InvalidDataException("The saved coin wallet is invalid. Its file has been preserved.");
     }
 

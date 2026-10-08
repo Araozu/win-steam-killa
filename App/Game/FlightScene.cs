@@ -29,10 +29,12 @@ public sealed class FlightScene : FrameworkElement, IDisposable
     private readonly (double X, double Y, double Radius, double Phase)[] _stars;
     private bool _subscribed;
     private bool _disposed;
+    private bool _paused;
     private double _lastFrame;
     private decimal _seenCashout;
     private double _cashoutTime = -10;
     internal CrashGame? Game { get; set; }
+    internal bool IsRendering => _subscribed;
 
     public FlightScene()
     {
@@ -48,12 +50,21 @@ public sealed class FlightScene : FrameworkElement, IDisposable
 
     private void UpdateSubscription()
     {
-        if (!_disposed && IsLoaded && IsVisible && !_subscribed)
+        if (!_disposed && !_paused && IsLoaded && IsVisible && !_subscribed)
         {
             CompositionTarget.Rendering += RenderFrame;
             _subscribed = true;
         }
-        else if (_disposed || !IsVisible) StopRendering();
+        else if (_disposed || _paused || !IsVisible) StopRendering();
+    }
+
+    internal void SetPaused(bool paused)
+    {
+        _paused = paused;
+        if (paused) _ambient.Stop();
+        else _ambient.Start();
+        UpdateSubscription();
+        InvalidateVisual();
     }
 
     private void StopRendering()

@@ -11,7 +11,11 @@ namespace App.Game;
 
 public partial class FlightGameView : Wpf.UserControl, IDisposable
 {
+    internal const int PanelHeight = 514;
+    private static readonly TimeSpan IdlePauseDelay = TimeSpan.FromMinutes(2);
     private readonly CrashGame? _game;
+    private readonly Func<PipeRequest, Task<PipeResponse?>> _send;
+    private readonly Func<DateTime> _idleNow;
     private readonly DispatcherTimer _tick = new() { Interval = TimeSpan.FromMilliseconds(50) };
     private IReadOnlyList<FlightResult>? _lastHistory;
     private FlightPhase _lastPhase = (FlightPhase)(-1);
@@ -19,12 +23,25 @@ public partial class FlightGameView : Wpf.UserControl, IDisposable
     private bool _disposed;
     private Guid _shownRoundId;
     private bool _boardingAction;
+    private PipeResponse? _budgetStatus;
+    private DateTime _budgetReceivedAt;
+    private bool _exchangeBusy;
+    private DateTime _exchangeRetryAt;
+    private string? _exchangeMessage;
+    private bool _appFocused = true;
+    private DateTime _unfocusedAt;
     private readonly Dictionary<string, Brush> _inks = new();
+
+    public event Action<PipeResponse>? BudgetChanged;
+    internal bool IsTicking => _tick.IsEnabled;
 
     public FlightGameView() : this(null) { }
 
-    internal FlightGameView(CrashGame? game)
+    internal FlightGameView(CrashGame? game, Func<PipeRequest, Task<PipeResponse?>>? send = null,
+        Func<DateTime>? idleNow = null)
     {
+        _send = send ?? (request => PipeClient.SendAsync(request));
+        _idleNow = idleNow ?? (() => DateTime.UtcNow);
         InitializeComponent();
         try
         {
@@ -69,18 +86,44 @@ public partial class FlightGameView : Wpf.UserControl, IDisposable
 
     private void Tick(object? sender, EventArgs e)
     {
-        if (_disposed || _game == null || _error != null) return;
+        if (_disposed) return;
         try
         {
+            if (!_appFocused && _idleNow() - _unfocusedAt >= IdlePauseDelay)
+            {
+                _tick.Stop();
+                Scene.SetPaused(true);
+                _game?.Pause();
+                RefreshView();
+                return;
+            }
+            if (_game == null || _error != null) return;
             _game.Update();
-            // All flights keep looping while hidden, with or without a bet.
+            // Loop during the inactivity grace period, including while hidden.
             _game.Wallet.RefreshDailyGrant(DateTime.Now);
+            if (_game.Wallet.PendingExchange != null && !_exchangeBusy && DateTime.UtcNow >= _exchangeRetryAt)
+                _ = ResolveExchangeAsync();
             _tick.Interval = TimeSpan.FromMilliseconds(IsVisible ? 50 : 250);
             if (IsVisible) RefreshView();
         }
         catch (Exception ex) when (IsWalletError(ex))
         {
             _error = "Could not save coins: " + ex.Message;
+            RefreshView();
+        }
+    }
+
+    public void SetAppFocused(bool focused)
+    {
+        if (_disposed || _appFocused == focused) return;
+        _appFocused = focused;
+        if (!focused) _unfocusedAt = _idleNow();
+        else
+        {
+            _game?.Resume();
+            Scene.SetPaused(false);
+            _lastPhase = (FlightPhase)(-1);
+            _tick.Start();
             RefreshView();
         }
     }
@@ -93,6 +136,7 @@ public partial class FlightGameView : Wpf.UserControl, IDisposable
             BetControls.IsEnabled = AutoControls.IsEnabled = false;
             MessageText.Text = _error;
             MessageText.Foreground = Ink("#FF9BAC");
+            SellCoinsButton.IsEnabled = BuyCoinsButton.IsEnabled = false;
             return;
         }
         var g = _game;
@@ -100,12 +144,12 @@ public partial class FlightGameView : Wpf.UserControl, IDisposable
         BalanceText.ToolTip = $"100 coins daily at 03:00. Next grant: {LogicalDay.NextResetLocal(DateTime.Now):ddd HH:mm}. Coins carry over.";
         bool newRound = _shownRoundId != g.RoundId;
         _shownRoundId = g.RoundId;
-        _boardingAction = g.Phase == FlightPhase.Boarding && !g.HasBet;
+        _boardingAction = !g.IsPaused && g.Phase == FlightPhase.Boarding && !g.HasBet;
         BetControls.IsEnabled = AutoControls.IsEnabled = _boardingAction;
-        ActionButton.IsEnabled = g.HasLiveBet || _boardingAction && g.Wallet.Balance >= 1;
+        ActionButton.IsEnabled = !g.IsPaused && (g.HasLiveBet || _boardingAction && g.Wallet.Balance >= 1);
         MultiplierText.Text = g.Phase == FlightPhase.Boarding ? $"{Math.Ceiling(g.BoardingLeft):0}s" : $"{g.Multiplier:0.00}×";
         MultiplierText.Foreground = Ink(g.Phase == FlightPhase.Crashed ? "#FF7287" : "#F1F5FF");
-        PhaseText.Text = g.Phase switch
+        PhaseText.Text = g.IsPaused ? "PAUSED · SWITCH BACK TO RESUME" : g.Phase switch
         {
             FlightPhase.Boarding => g.HasBet ? "YOU'RE ON BOARD · TAKEOFF IN" : "BOARDING OPEN · TAKEOFF IN",
             FlightPhase.Flying => g.CashedAt > 0 ? "CASHED OUT · WATCH THE FLIGHT" : g.HasBet ? "CLIMBING" : "CLIMBING · SPECTATING",
@@ -118,7 +162,7 @@ public partial class FlightGameView : Wpf.UserControl, IDisposable
         OutcomeText.Foreground = Ink(g.CashedAt > 0 ? "#6FE2B6" : "#AEC1E3");
         ActionButton.Background = Ink(g.HasLiveBet ? "#27BA89" : _boardingAction ? "#EF4C68" : "#33435D");
         ActionButton.Foreground = Ink(g.HasLiveBet ? "#072C23" : "#FFFFFF");
-        ActionButton.Content = g.Phase switch
+        ActionButton.Content = g.IsPaused ? "PAUSED" : g.Phase switch
         {
             FlightPhase.Boarding => g.HasBet ? $"ON BOARD  ·  {Coins(g.Bet)} COINS" : "BOARD THIS FLIGHT",
             FlightPhase.Flying when g.HasLiveBet => $"CASH OUT  ·  {Gain(FlightWallet.PayoutFor(g.Bet, g.Multiplier))} COINS",
@@ -133,6 +177,8 @@ public partial class FlightGameView : Wpf.UserControl, IDisposable
         }
         if (g.Wallet.Balance < 1 && !g.HasLiveBet)
             MessageText.Text = $"Keep watching · next 100 coins {LogicalDay.NextResetLocal(DateTime.Now):ddd 'at' HH:mm}.";
+        if (g.IsPaused)
+            MessageText.Text = "Game paused after 2 minutes away. Return to this window to resume.";
         // Rebuild only when a flight finishes, not on every animation frame.
         if (!ReferenceEquals(_lastHistory, g.Wallet.History))
         {
@@ -153,13 +199,104 @@ public partial class FlightGameView : Wpf.UserControl, IDisposable
                 });
             }
         }
+        RefreshExchangeControls();
+    }
+
+    public void SetBudgetStatus(PipeResponse? status)
+    {
+        if (_disposed) return;
+        if (!ReferenceEquals(status, _budgetStatus)) _budgetReceivedAt = DateTime.UtcNow;
+        _budgetStatus = status;
+        if (_game?.IsPaused != true) RefreshExchangeControls();
+    }
+
+    private void RefreshExchangeControls()
+    {
+        bool available = _game != null && !_game.IsPaused && _error == null && !_exchangeBusy && _game.Wallet.PendingExchange == null &&
+            _budgetStatus?.SupportsCoinExchange == true && _budgetStatus.LogicalDay == LogicalDay.ForLocal(DateTime.Now);
+        double remaining = _budgetStatus?.RemainingSeconds ?? 0;
+        if (_budgetStatus?.Running == true && !_budgetStatus.InCooldown)
+            remaining = Math.Max(0, remaining - (DateTime.UtcNow - _budgetReceivedAt).TotalSeconds);
+        SellCoinsButton.IsEnabled = available && _game!.Wallet.Balance >= CoinExchangeRates.SoldCoins;
+        BuyCoinsButton.IsEnabled = available && remaining >= CoinExchangeRates.PurchaseSeconds &&
+            _game!.Wallet.Balance <= FlightWallet.MaximumBalance - CoinExchangeRates.BoughtCoins;
+        ExchangeMessageText.Text = _game?.Wallet.PendingExchange != null
+            ? _exchangeMessage ?? "Exchange pending · waiting for the service."
+            : _exchangeMessage ?? (_budgetStatus == null ? "Connect to the SteamTimer service to trade coins."
+                : !_budgetStatus.SupportsCoinExchange ? "Update the SteamTimer service to trade coins."
+                : $"Today: {Limits.FormatGain(TimeSpan.FromSeconds(remaining))} remaining · trades use today's budget.");
+    }
+
+    private async void SellCoinsClick(object sender, RoutedEventArgs e) => await ExchangeAsync(buyCoins: false);
+    private async void BuyCoinsClick(object sender, RoutedEventArgs e) => await ExchangeAsync(buyCoins: true);
+
+    private async Task ExchangeAsync(bool buyCoins)
+    {
+        if (_disposed || _game == null || _error != null || _exchangeBusy ||
+            !(buyCoins ? BuyCoinsButton.IsEnabled : SellCoinsButton.IsEnabled)) return;
+        try
+        {
+            _game.Update();
+            _game.Wallet.RefreshDailyGrant(DateTime.Now);
+            _game.Wallet.BeginExchange(buyCoins, DateTime.Now);
+            _exchangeMessage = "Exchanging…";
+            RefreshView();
+            await ResolveExchangeAsync();
+        }
+        catch (Exception ex) when (IsWalletError(ex))
+        {
+            _error = "Could not save coins: " + ex.Message;
+            RefreshView();
+        }
+        catch (InvalidOperationException ex)
+        {
+            _exchangeMessage = ex.Message;
+            RefreshExchangeControls();
+        }
+    }
+
+    private async Task ResolveExchangeAsync()
+    {
+        if (_disposed || _exchangeBusy || _game?.Wallet.PendingExchange is not { } pending) return;
+        _exchangeBusy = true;
+        RefreshExchangeControls();
+        PipeResponse? response;
+        try { response = await _send(new PipeRequest { Cmd = CoinExchangeRates.Command, Exchange = pending }).ConfigureAwait(false); }
+        catch (Exception ex) when (ex is IOException or TimeoutException or OperationCanceledException) { response = null; }
+        if (_disposed) return; // The journal is recovered by the next app instance.
+        // Explicit dispatcher ownership also works in a standalone WPF host,
+        // where an input event need not have a SynchronizationContext installed.
+        await Dispatcher.InvokeAsync(() =>
+        {
+            try
+            {
+                if (_disposed) return;
+                if (response?.ExchangeReceipt is { } receipt && receipt.Request == pending)
+                {
+                    _game.Wallet.CompleteExchange(receipt);
+                    _exchangeMessage = receipt.Applied
+                        ? pending.BuyCoins ? "Bought 10 coins · spent 11m of today's budget." : "Sold 1 coin · added 1m to today's budget."
+                        : receipt.Error;
+                    SetBudgetStatus(response);
+                    BudgetChanged?.Invoke(response);
+                }
+                else _exchangeMessage = "Exchange pending · service unavailable. Retrying…";
+            }
+            catch (Exception ex) when (IsWalletError(ex)) { _error = "Could not save coins: " + ex.Message; }
+            finally
+            {
+                _exchangeBusy = false;
+                _exchangeRetryAt = DateTime.UtcNow.AddSeconds(5);
+                if (!_disposed) RefreshView();
+            }
+        });
     }
 
     private void ActionClick(object sender, RoutedEventArgs e) => Act();
 
     private void Act()
     {
-        if (_game == null || _error != null) return;
+        if (_game == null || _game.IsPaused || _error != null) return;
         try
         {
             if (_boardingAction)

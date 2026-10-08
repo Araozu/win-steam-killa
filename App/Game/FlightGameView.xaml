@@ -53,6 +53,8 @@
                 <RowDefinition Height="35" />
                 <RowDefinition Height="44" />
                 <RowDefinition Height="32" />
+                <RowDefinition Height="44" />
+                <RowDefinition Height="32" />
             </Grid.RowDefinitions>
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <Path Data="M 0,10 L 8,7 L 4,0 L 9,0 L 15,6 L 24,4 L 27,6 L 16,11 L 10,19 L 6,19 L 9,12 L 2,14 Z"
@@ -105,6 +107,20 @@
             <Button Grid.Row="5" x:Name="ActionButton" Content="BOARD THIS FLIGHT" FontWeight="Bold" FontSize="13"
                     Background="#EF4C68" Click="ActionClick" Margin="0,3,0,3" Typography.NumeralAlignment="Tabular" />
             <TextBlock Grid.Row="6" x:Name="MessageText" FontSize="10" Foreground="{StaticResource Muted}"
+                       TextWrapping="Wrap" VerticalAlignment="Center" />
+            <Grid Grid.Row="7" Margin="0,4,0,4">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Button x:Name="SellCoinsButton" Content="SELL 1 COIN · +1m" FontSize="11" Margin="0,0,4,0"
+                        Click="SellCoinsClick" IsEnabled="False" AutomationProperties.Name="Sell 1 coin for 1 minute today"
+                        ToolTip="Sell 1 available coin to add 1 minute to today's Steam budget." />
+                <Button Grid.Column="1" x:Name="BuyCoinsButton" Content="BUY 10 COINS · −11m" FontSize="11" Margin="4,0,0,0"
+                        Click="BuyCoinsClick" IsEnabled="False" AutomationProperties.Name="Buy 10 coins for 11 minutes today"
+                        ToolTip="Spend 11 minutes of today's remaining Steam budget to buy 10 coins." />
+            </Grid>
+            <TextBlock Grid.Row="8" x:Name="ExchangeMessageText" FontSize="10" Foreground="{StaticResource Muted}"
                        TextWrapping="Wrap" VerticalAlignment="Center" />
         </Grid>
     </Border>

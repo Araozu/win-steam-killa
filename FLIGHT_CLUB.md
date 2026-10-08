@@ -69,6 +69,35 @@ cent are unchanged.
 
 Hover over the coin balance to see the daily allowance and next reset time.
 
+## Trading coins and today's time
+
+The two buttons below the game connect the wallet to the SteamTimer service:
+
+| Button | Coin change | Today's budget change |
+| --- | --- | --- |
+| **Sell 1 coin** | −1 available coin | +1 minute |
+| **Buy 10 coins** | +10 coins | −11 minutes |
+
+Each click performs one trade. Purchases require at least 11 minutes of today's
+remaining budget. Sales use available coins, excluding coins already on board.
+You can trade during a flight; trading does not alter its stake or restart it.
+The coin balance and Today bar update when the service confirms the saved trade.
+Purchases cannot overfill the wallet.
+
+These are adjustments to **today's** budget, not tomorrow's borrowing or a change
+to played time. Selling coins can reopen an exhausted daily budget, but the normal
+2-hour session cap, cooldowns, and Dota weekly limit still apply. At 03:00 the net
+trade adjustment resets; leftover time follows the existing 30-minute carryover cap.
+
+Trades require the updated service. If it is unavailable, new trades are disabled
+while flights still work. An in-flight trade with a lost reply remains pending:
+the wallet reserves sold coins, and retries the same request every 5 seconds
+while the game is running. Reopening the app also recovers a pending trade.
+The service saves each wallet's latest numbered receipt with the budget change,
+so retries cannot trade twice. A trade not applied before the 03:00 reset is
+rejected and any reserved coins are refunded. A trade already applied before
+reset can still be confirmed afterward without changing the new day's budget.
+
 ## Round rules and timing
 
 The state machine is:
@@ -115,9 +144,14 @@ any remaining bet is collected automatically when the plane reaches it.
 
 ## Hiding, exiting, and saved state
 
-Closing the main window hides it to the tray. The entire loop continues, and
-auto-cash-out still works. Reopening shows the current flight or boarding window.
-Rendering callbacks detach while the graphics surface is hidden.
+Closing the main window hides it to the tray. Flights and auto-cash-out continue
+during the inactivity grace period. After **2 minutes without app focus**, the
+game freezes its current countdown, multiplier, result timer, and active bet.
+Its update timer stops and rendering callbacks detach, including when the window
+is visible behind another app. Returning to Steam Timer resumes that same round;
+time spent paused does not advance the flight or settle additional rounds.
+The timer service continues tracking and enforcing Steam play normally.
+Rendering callbacks also detach immediately while the graphics surface is hidden.
 After a long suspension, the active flight settles once and the loop opens a
 fresh 5-second boarding window, rather than replaying every missed round.
 
@@ -138,6 +172,12 @@ It is separate from the service's
 | `LastBet` / `LastAutoCashout` | Settings used to place the last bet |
 | `Pending` | Active flight ID, stake, crash point, auto target, and saved payout |
 | `History` | Up to eight completed or interrupted flights, newest first; a zero stake denotes spectating |
+| `ExchangeWalletId` / `ExchangeNumber` | Persistent wallet identity and last completed trade number |
+| `PendingExchange` | Journaled coin/time trade awaiting a matching service receipt |
+
+The service's `state.json` saves `CoinBudgetSeconds` (today's net trade adjustment)
+and `CoinExchanges` (the latest durable receipt per wallet). Receipt history
+survives daily rollovers even though the adjustment itself resets.
 
 Each mutation writes a temporary file, flushes it to disk, then replaces the
 wallet file. The in-memory wallet changes only after the replacement succeeds.
@@ -166,8 +206,9 @@ The graphics are vector paths and gradients: a red propeller plane, animated
 stars and clouds, a moving runway, a curved glowing trail, departure particles,
 and cash-out celebration particles. `CompositionTarget.Rendering` schedules
 visual updates, limited to at most 60 per second. The independent game timer
-updates the loop every 50 ms while visible and every 250 ms while hidden; drawing does
-not settle bets or mutate the wallet.
+updates the loop every 50 ms while visible and every 250 ms while hidden during
+the grace period, then stops entirely when idle-paused. Drawing does not settle
+bets or mutate the wallet; the graphics animation clock freezes too.
 
 The host window supports DPI scaling and vertical scrolling on shorter
 desktops. Relaunching the app signals the existing instance to open its window
@@ -184,6 +225,7 @@ through a session-local mutex and activation event.
 | [Program.cs](App/Program.cs) | Single-instance startup and window activation |
 | [CrashGameTests.cs](Tests/CrashGameTests.cs) | Wallet and round regression tests |
 | [FlightViewTests.cs](Tests/FlightViewTests.cs) | STA native rendering and interaction test |
+| [CoinExchangeTests.cs](Tests/CoinExchangeTests.cs) | Coin/time accounting, durable retries, daily resets, and failed-save recovery |
 
 ## Building, checking, and installing
 
@@ -196,6 +238,7 @@ From the repository root:
 dotnet build SteamTimer.slnx -c Release
 dotnet test SteamTimer.slnx -c Release --verbosity minimal
 dotnet publish App/App.csproj -c Release -r win-x64 --self-contained false -o publish/App
+dotnet publish Service/Service.csproj -c Release -r win-x64 --self-contained false -o publish/Service
 ```
 
 The test suite uses temporary wallets and deterministic clocks. The native UI
@@ -203,7 +246,10 @@ test runs on an STA thread and checks input validation, takeoff, automatic and
 keyboard cash-out, spectator flights, hidden-flight completion, the 5-second
 result display and boarding countdown, two-decimal payout display, DPI-scaled
 rendering, and the scrollable WinForms host. Tests do not launch Steam or write
-to the real coin wallet.
+to the real coin wallet or service state. Exchange tests use temporary service
+stores and cover both rates, retries/restarts, insufficient time, reset races,
+and failed saves. Idle tests check visible and hidden panels stop model ticks
+and rendering at the 2-minute boundary and resume their preserved round.
 
 To save screenshots of the native game states and host window:
 
@@ -212,10 +258,10 @@ $env:STEAMTIMER_TEST_SCREENSHOTS = "$env:TEMP\SteamTimer-flight-evidence"
 dotnet test SteamTimer.slnx -c Release --verbosity minimal
 ```
 
-Verification on **2026-10-08**: **40 tests passed**, Release solution build
+Verification on **2026-10-08**: **65 tests passed**, Release solution build
 completed with **0 warnings and 0 errors**, and the Windows x64 app published
-successfully. Screenshots of flight states, scaled graphics, and the actual
-host window were also inspected.
+successfully alongside the updated service. Screenshots of flight states, scaled
+graphics, and the actual host window were also inspected.
 
 To update the installed copy, run [Setup/install.ps1](Setup/install.ps1) as
 Administrator and reopen Steam Timer. Building or publishing alone updates

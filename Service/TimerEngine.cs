@@ -6,7 +6,7 @@ namespace Service;
 // Model: each logical day (03:00 local) has a base budget (M-F 1h30m, Sat 2h30m,
 // Sun 4h) plus up to 30m leftover carried from the previous day, plus optional
 // borrows (each -10m tomorrow, +95%/-7pp/0.1%-floor of 10m today, no Sundays)
-// minus yesterday's debt.
+// minus yesterday's debt, plus coin sales / minus coin purchases today.
 // Sessions are automatic: the moment Steam (client or descendant game, + orphan
 // fallback) is seen, a session opens and accrues. Each session can use up to 2h
 // of the day's budget. When a session ends (Steam closed or 2h max), a cooldown
@@ -16,7 +16,8 @@ namespace Service;
 // weekly Dota budget is out only Dota is killed, Steam + other games continue.
 public class TimerEngine
 {
-    private readonly StateStore _store = new();
+    private readonly StateStore _store;
+    private readonly Func<DateTime> _utcNow;
     private readonly object _lock = new();
     private TimerState? _state;
     private DateTime _lastEnforceKill = DateTime.MinValue;
@@ -29,9 +30,11 @@ public class TimerEngine
     // gap must not burn the budget while we were down.
     private static readonly TimeSpan MaxTickCredit = TimeSpan.FromSeconds(30);
 
-    public TimerEngine(ILogger<TimerEngine> log)
+    public TimerEngine(ILogger<TimerEngine> log, StateStore? store = null, Func<DateTime>? utcNow = null)
     {
         _log = log;
+        _store = store ?? new StateStore();
+        _utcNow = utcNow ?? (() => DateTime.UtcNow);
         _state = _store.Load();
         if (_state != null && _state.Version != 3)
         {
@@ -39,8 +42,8 @@ public class TimerEngine
             _state = null;
             _store.Clear();
         }
-        var nowUtc = DateTime.UtcNow;
-        var today = LogicalDay.ForLocal(DateTime.Now);
+        var nowUtc = _utcNow();
+        var today = LogicalDay.ForLocal(nowUtc.ToLocalTime());
         if (_state != null && _state.LogicalDay != today)
         {
             // Fresh day on boot: roll forward so yesterday's leftover carries in.
@@ -59,7 +62,7 @@ public class TimerEngine
     }
 
     private static double EffectiveOf(TimerState st) => Math.Max(0,
-        st.BaseBudgetSeconds + st.CarryInSeconds + st.BorrowedSeconds - st.AdvanceDeductionSeconds);
+        (double)st.BaseBudgetSeconds + st.CarryInSeconds + st.BorrowedSeconds + st.CoinBudgetSeconds - st.AdvanceDeductionSeconds);
 
     // Tomorrow's base budget (for the borrow cap + display).
     private static int TomorrowBaseFor(string logicalDay)
@@ -77,8 +80,6 @@ public class TimerEngine
         if (!DateTime.TryParse(today, out var todayDate)) return 0;
         if (oldDate.Date != todayDate.Date.AddDays(-1)) return 0; // multi-day gap: no carry
         double effective = EffectiveOf(old);
-        if (effective <= 0) // pre-v3 state shape: fall back to base-derived effective
-            effective = BaseSecondsFor(old.LogicalDay);
         double leftover = Math.Max(0, effective - old.UsedSeconds);
         return (int)Math.Min(Limits.MaxCarryover.TotalSeconds, leftover);
     }
@@ -104,6 +105,7 @@ public class TimerEngine
             BorrowCount = 0,
             LastTickUtc = nowUtc,
             DotaWeekStart = week,
+            CoinExchanges = old?.CoinExchanges ?? new(),
         };
         // Weekly Dota usage survives day rollovers inside the same week.
         if (old != null && old.DotaWeekStart == week)
@@ -159,8 +161,8 @@ public class TimerEngine
     {
         lock (_lock)
         {
-            var nowUtc = DateTime.UtcNow;
-            var nowLocal = DateTime.Now;
+            var nowUtc = _utcNow();
+            var nowLocal = nowUtc.ToLocalTime();
             var today = LogicalDay.ForLocal(nowLocal);
             var resp = new PipeResponse { ServerNowUtc = nowUtc, NextResetLocal = LogicalDay.NextResetLocal(nowLocal), LogicalDay = today };
             var st = EnsureDay(today, nowUtc);
@@ -192,11 +194,62 @@ public class TimerEngine
             {
                 return Borrow(st, nowUtc, resp);
             }
+            if (req.Cmd == CoinExchangeRates.Command)
+                return ExchangeCoins(st, req.Exchange, nowUtc, resp);
             return Fail("unknown cmd", resp);
         }
     }
 
     private static PipeResponse Fail(string e, PipeResponse r) { r.Ok = false; r.Error = e; return r; }
+
+    private PipeResponse ExchangeCoins(TimerState st, CoinExchangeRequest? request, DateTime nowUtc, PipeResponse resp)
+    {
+        Fill(resp, st, nowUtc, liveCheck: false);
+        if (request == null || request.WalletId == Guid.Empty || request.Number < 1)
+            return Fail("Invalid coin exchange request.", resp);
+        st.CoinExchanges.TryGetValue(request.WalletId, out var previous);
+        if (previous?.Request.Number == request.Number && previous.Request == request)
+        {
+            Fill(resp, st, nowUtc, liveCheck: true);
+            resp.ExchangeReceipt = previous;
+            return previous.Applied ? resp : Fail(previous.Error, resp);
+        }
+        if (request.Number != (previous?.Request.Number ?? 0) + 1)
+            return Fail("Coin exchange sequence does not match this wallet.", resp);
+
+        string error = "";
+        int change = request.BuyCoins ? -CoinExchangeRates.PurchaseSeconds : CoinExchangeRates.SaleSeconds;
+        // Account for play since the last metering tick when checking what can
+        // be spent. The worker will accrue these seconds normally on its tick.
+        double unmetered = st.Running && st.CooldownUntilUtc <= nowUtc
+            ? Math.Clamp((nowUtc - st.LastTickUtc).TotalSeconds, 0, MaxTickCredit.TotalSeconds) : 0;
+        if (request.LogicalDay != st.LogicalDay)
+            error = "Today's budget reset before this exchange. Try again for the new day.";
+        else if (request.BuyCoins && EffectiveOf(st) - st.UsedSeconds - unmetered < CoinExchangeRates.PurchaseSeconds)
+            error = "You need at least 11 minutes of today's remaining budget to buy 10 coins.";
+        else if ((long)st.CoinBudgetSeconds + change is < int.MinValue or > int.MaxValue ||
+                 EffectiveOf(st) + change > int.MaxValue)
+            error = "Today's budget cannot hold any more time.";
+
+        var receipt = new CoinExchangeReceipt(request, error.Length == 0, error);
+        var next = st.Copy();
+        next.CoinExchanges = new(st.CoinExchanges) { [request.WalletId] = receipt };
+        if (receipt.Applied)
+        {
+            next.CoinBudgetSeconds += change;
+            if (EffectiveOf(next) > next.UsedSeconds) next.KillNotified = false;
+            if (EffectiveOf(next) - next.UsedSeconds > Limits.WarnBefore.TotalSeconds) next.Warned15m = false;
+        }
+        // Save the adjustment and receipt together before publishing either.
+        _store.Save(next);
+        _state = next;
+        Fill(resp, next, nowUtc, liveCheck: true);
+        resp.ExchangeReceipt = receipt;
+        if (!receipt.Applied) return Fail(receipt.Error, resp);
+        resp.ActionNote = request.BuyCoins ? "Bought 10 coins for 11 minutes of today's budget."
+            : "Sold 1 coin for 1 minute of today's budget.";
+        return resp;
+    }
 
     private static string BuildRecheckNote(PipeResponse r)
     {
@@ -359,6 +412,8 @@ public class TimerEngine
         r.BorrowedSeconds = st.BorrowedSeconds;
         r.BorrowCount = st.BorrowCount;
         r.AdvanceDeductionSeconds = st.AdvanceDeductionSeconds;
+        r.CoinBudgetSeconds = st.CoinBudgetSeconds;
+        r.SupportsCoinExchange = true;
         r.TomorrowBaseSeconds = TomorrowBaseFor(st.LogicalDay);
         r.NextBorrowEffectiveness = Limits.NextBorrowEffectiveness(st.BorrowCount);
         r.NextBorrowGainSeconds = (int)Limits.BorrowGainForNumber(st.BorrowCount + 1).TotalSeconds;
@@ -386,7 +441,7 @@ public class TimerEngine
         r.DotaRemainingSeconds = dotaRem;
         r.DotaRunning = dotaRunning;
         r.DotaEnforcing = dotaRem <= 0;
-        r.DotaResetsLocal = Limits.NextWeeklyResetLocal(DateTime.Now);
+        r.DotaResetsLocal = Limits.NextWeeklyResetLocal(nowUtc.ToLocalTime());
         r.LiveClients = snap?.Clients.Take(10).ToList() ?? new List<string>();
         r.LiveGames = snap?.Games.Select(g => $"{g.Name} ({g.Pid})").Take(10).ToList() ?? new List<string>();
         r.MatchedOrphans = snap?.MatchedOrphans.Take(10).ToList() ?? new List<string>();
@@ -410,8 +465,8 @@ public class TimerEngine
         var notes = new List<(string, string)>();
         lock (_lock)
         {
-            var nowUtc = DateTime.UtcNow;
-            var nowLocal = DateTime.Now;
+            var nowUtc = _utcNow();
+            var nowLocal = nowUtc.ToLocalTime();
             var today = LogicalDay.ForLocal(nowLocal);
             double sessionMax = Limits.SessionMax.TotalSeconds;
             double dotaBudget = Limits.DotaWeeklyBudget.TotalSeconds;
@@ -696,8 +751,8 @@ public class TimerEngine
             if (_state == null) return (false, default, false);
             double effective = EffectiveOf(_state);
             double rem = Math.Max(0, effective - _state.UsedSeconds);
-            bool inCd = _state.CooldownUntilUtc > DateTime.UtcNow;
-            DateTime deadline = inCd ? _state.CooldownUntilUtc : DateTime.UtcNow.AddSeconds(rem);
+            bool inCd = _state.CooldownUntilUtc > _utcNow();
+            DateTime deadline = inCd ? _state.CooldownUntilUtc : _utcNow().AddSeconds(rem);
             return (true, deadline, rem <= 0);
         }
     }

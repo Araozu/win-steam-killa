@@ -7,6 +7,9 @@ using System.Windows.Input;
 using System.Windows.Threading;
 using App;
 using App.Game;
+using Microsoft.Extensions.Logging.Abstractions;
+using Service;
+using Shared;
 using Wpf = System.Windows.Controls;
 using Forms = System.Windows.Forms;
 using Point = System.Windows.Point;
@@ -27,8 +30,8 @@ public sealed class FlightViewTests
                 double clock = 0;
                 var wallet = new FlightWallet(Path.Combine(directory, "wallet.json"), DateTime.Now);
                 var game = new CrashGame(wallet, () => clock, () => 4);
-                using var view = new FlightGameView(game) { Width = 360, Height = 438 };
-                var window = new Window { Content = view, Width = 390, Height = 480, ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.CenterScreen };
+                using var view = new FlightGameView(game) { Width = 360, Height = FlightGameView.PanelHeight };
+                var window = new Window { Content = view, Width = 390, Height = FlightGameView.PanelHeight + 42, ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.CenterScreen };
                 try
                 {
                     window.Show();
@@ -134,6 +137,13 @@ public sealed class FlightViewTests
                 // Test the actual WinForms/WPF embedding and short-window scroll.
                 using var form = new MainForm(new CrashGame(wallet, () => clock, () => 5));
                 form.Show();
+                form.UpdateFromStatus(new PipeResponse
+                {
+                    Ok = true, SupportsCoinExchange = true, ServerNowUtc = DateTime.UtcNow,
+                    LogicalDay = LogicalDay.ForLocal(DateTime.Now), BudgetSeconds = 5400,
+                    BaseBudgetSeconds = 5400, RemainingSeconds = 5400,
+                    DotaBudgetSeconds = 32400, DotaRemainingSeconds = 32400,
+                });
                 Pump(600);
                 var host = Descendants(form).OfType<System.Windows.Forms.Integration.ElementHost>().Single();
                 Assert.True(host.Visible);
@@ -147,6 +157,179 @@ public sealed class FlightViewTests
                 Assert.True(host.PointToScreen(System.Drawing.Point.Empty).Y < form.PointToScreen(new System.Drawing.Point(0, form.ClientSize.Height)).Y);
                 CaptureForm(form, "steam-timer-short-window.png");
                 // Dispose bypasses the normal X-to-tray behavior for this test.
+            }
+            finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        });
+    }
+
+    [Fact]
+    public void ExchangeButtonsUpdateCoinsAndBudgetWithoutBlockingTheFlight()
+    {
+        RunSta(() =>
+        {
+            string directory = Path.Combine(Path.GetTempPath(), "SteamTimerTests", Guid.NewGuid().ToString("N"));
+            try
+            {
+                double clock = 0;
+                var wallet = new FlightWallet(Path.Combine(directory, "wallet.json"), DateTime.Now);
+                var game = new CrashGame(wallet, () => clock, () => 4);
+                var engine = new TimerEngine(NullLogger<TimerEngine>.Instance, new StateStore(Path.Combine(directory, "budget.json")));
+                var reply = new TaskCompletionSource<PipeResponse?>(TaskCreationOptions.RunContinuationsAsynchronously);
+                PipeRequest? sent = null;
+                int calls = 0;
+                using var view = new FlightGameView(game, request => { sent = request; calls++; return reply.Task; })
+                    { Width = 360, Height = FlightGameView.PanelHeight };
+                var window = new Window { Content = view, Width = 390, Height = FlightGameView.PanelHeight + 42, ShowInTaskbar = false };
+                try
+                {
+                    window.Show();
+                    Pump();
+                    var sell = (Wpf.Button)view.FindName("SellCoinsButton");
+                    var buy = (Wpf.Button)view.FindName("BuyCoinsButton");
+                    Assert.False(sell.IsEnabled);
+                    Assert.False(buy.IsEnabled);
+                    view.SetBudgetStatus(new PipeResponse { Ok = true }); // Older installed service.
+                    Assert.False(sell.IsEnabled);
+                    PipeResponse? changed = null;
+                    view.BudgetChanged += response => changed = response;
+                    view.SetBudgetStatus(engine.Handle(new PipeRequest { Cmd = "status" }));
+                    Assert.True(sell.IsEnabled);
+                    Assert.True(buy.IsEnabled);
+                    Click(sell);
+                    Assert.Equal(99, wallet.Balance);
+                    Assert.NotNull(wallet.PendingExchange);
+                    Assert.False(sell.IsEnabled);
+                    Assert.False(buy.IsEnabled);
+                    Click(sell);
+                    Assert.Equal(1, calls);
+                    clock = 6;
+                    Pump();
+                    Assert.Equal(FlightPhase.Flying, game.Phase);
+                    reply.SetResult(engine.Handle(sent));
+                    Pump();
+                    Assert.Null(wallet.PendingExchange);
+                    Assert.Equal(60, changed!.CoinBudgetSeconds);
+                    Assert.Equal(5460, changed.RemainingSeconds);
+                    Assert.Contains("added 1m", ((Wpf.TextBlock)view.FindName("ExchangeMessageText")).Text);
+
+                    reply = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                    Click(buy);
+                    Assert.Equal(2, calls);
+                    Assert.Equal(99, wallet.Balance); // Coins arrive only with the saved service receipt.
+                    reply.SetResult(engine.Handle(sent));
+                    Pump();
+                    Assert.Equal(109, wallet.Balance);
+                    Assert.Equal(-600, changed!.CoinBudgetSeconds);
+                    Assert.Equal(4800, changed.RemainingSeconds);
+                    Assert.Contains("109", ((Wpf.TextBlock)view.FindName("BalanceText")).Text);
+                    CaptureView(view, "flight-exchange.png", 1);
+
+                    view.SetBudgetStatus(new PipeResponse
+                    {
+                        Ok = true, SupportsCoinExchange = true, LogicalDay = LogicalDay.ForLocal(DateTime.Now), RemainingSeconds = 600,
+                    });
+                    Assert.False(buy.IsEnabled);
+                    Assert.True(sell.IsEnabled);
+                    view.SetBudgetStatus(null);
+                    Assert.False(sell.IsEnabled);
+                    Assert.False(buy.IsEnabled);
+                }
+                finally { window.Close(); }
+            }
+            finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        });
+    }
+
+    [Fact]
+    public void ALostExchangeReplyIsRecoveredByTheNextViewWithoutAnotherCharge()
+    {
+        RunSta(() =>
+        {
+            string directory = Path.Combine(Path.GetTempPath(), "SteamTimerTests", Guid.NewGuid().ToString("N"));
+            try
+            {
+                string path = Path.Combine(directory, "wallet.json");
+                var wallet = new FlightWallet(path, DateTime.Now);
+                var engine = new TimerEngine(NullLogger<TimerEngine>.Instance, new StateStore(Path.Combine(directory, "budget.json")));
+                using (var view = new FlightGameView(new CrashGame(wallet, () => 0, () => 4), request =>
+                {
+                    Assert.True(engine.Handle(request).Ok);
+                    return Task.FromResult<PipeResponse?>(null); // Applied, but the reply was lost.
+                }))
+                {
+                    view.SetBudgetStatus(engine.Handle(new PipeRequest { Cmd = "status" }));
+                    Click((Wpf.Button)view.FindName("SellCoinsButton"));
+                    Pump();
+                    Assert.Equal(99, wallet.Balance);
+                    Assert.NotNull(wallet.PendingExchange);
+                    Assert.Contains("pending", ((Wpf.TextBlock)view.FindName("ExchangeMessageText")).Text);
+                }
+                var reopened = new FlightWallet(path, DateTime.Now);
+                using var recovered = new FlightGameView(new CrashGame(reopened, () => 0, () => 4),
+                    request => Task.FromResult<PipeResponse?>(engine.Handle(request)));
+                Pump();
+                Assert.Null(reopened.PendingExchange);
+                Assert.Equal(99, reopened.Balance);
+                Assert.Equal(60, new StateStore(Path.Combine(directory, "budget.json")).Load()!.CoinBudgetSeconds);
+            }
+            finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TwoMinutesWithoutFocusStopsModelTicksAndRenderingUntilFocusReturns(bool hidden)
+    {
+        RunSta(() =>
+        {
+            string directory = Path.Combine(Path.GetTempPath(), "SteamTimerTests", Guid.NewGuid().ToString("N"));
+            try
+            {
+                double clock = 0;
+                DateTime idleNow = DateTime.UtcNow;
+                var wallet = new FlightWallet(Path.Combine(directory, "wallet.json"), DateTime.Now);
+                var game = new CrashGame(wallet, () => clock, () => 4);
+                using var view = new FlightGameView(game, idleNow: () => idleNow)
+                    { Width = 360, Height = FlightGameView.PanelHeight };
+                var window = new Window { Content = view, Width = 390, Height = FlightGameView.PanelHeight + 42, ShowInTaskbar = false };
+                try
+                {
+                    window.Show();
+                    Pump();
+                    var scene = (FlightScene)view.FindName("Scene");
+                    Assert.True(scene.IsRendering);
+                    view.SetAppFocused(false);
+                    if (hidden) window.Hide();
+                    idleNow = idleNow.AddSeconds(119);
+                    Pump(300);
+                    Assert.False(game.IsPaused);
+                    Assert.True(view.IsTicking);
+                    Assert.Equal(!hidden, scene.IsRendering);
+                    idleNow = idleNow.AddSeconds(1);
+                    Pump(300);
+                    Assert.True(game.IsPaused);
+                    Assert.False(view.IsTicking);
+                    Assert.False(scene.IsRendering);
+                    Assert.Equal("PAUSED", ((Wpf.Button)view.FindName("ActionButton")).Content);
+                    clock += 3600;
+                    idleNow = idleNow.AddHours(1);
+                    Pump();
+                    Assert.Equal(5d, game.BoardingLeft, 6);
+                    Assert.Empty(wallet.History);
+                    if (hidden) window.Show();
+                    view.SetAppFocused(true);
+                    Pump();
+                    Assert.False(game.IsPaused);
+                    Assert.True(view.IsTicking);
+                    Assert.True(scene.IsRendering);
+                    Assert.Equal("5s", ((Wpf.TextBlock)view.FindName("MultiplierText")).Text);
+                    view.SetAppFocused(false);
+                    idleNow = idleNow.AddSeconds(119);
+                    Pump();
+                    Assert.False(game.IsPaused); // Returning resets the full grace period.
+                }
+                finally { window.Close(); }
             }
             finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
         });
@@ -192,8 +375,24 @@ public sealed class FlightViewTests
         var evidence = Environment.GetEnvironmentVariable("STEAMTIMER_TEST_SCREENSHOTS");
         if (evidence == null) return;
         using var image = new System.Drawing.Bitmap(form.Width, form.Height);
+        // Capture this form, not whichever app happens to be in the foreground.
+        form.DrawToBitmap(image, new System.Drawing.Rectangle(System.Drawing.Point.Empty, form.Size));
         using var graphics = System.Drawing.Graphics.FromImage(image);
-        graphics.CopyFromScreen(form.Location, System.Drawing.Point.Empty, image.Size);
+        foreach (var host in Descendants(form).OfType<System.Windows.Forms.Integration.ElementHost>())
+        {
+            if (host.Child is not FrameworkElement child) continue;
+            var rendered = new RenderTargetBitmap(host.ClientSize.Width, host.ClientSize.Height,
+                form.DeviceDpi, form.DeviceDpi, PixelFormats.Pbgra32);
+            rendered.Render(child);
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(rendered));
+            using var stream = new MemoryStream();
+            encoder.Save(stream);
+            stream.Position = 0;
+            using var panel = System.Drawing.Image.FromStream(stream);
+            var position = host.PointToScreen(System.Drawing.Point.Empty);
+            graphics.DrawImageUnscaled(panel, position.X - form.Left, position.Y - form.Top);
+        }
         image.Save(Path.Combine(evidence, filename), System.Drawing.Imaging.ImageFormat.Png);
     }
 

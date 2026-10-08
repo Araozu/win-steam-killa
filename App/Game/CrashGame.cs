@@ -19,6 +19,9 @@ internal sealed class CrashGame
     private double _launchAt;
     private double _crashedAt;
     private decimal _crashAt;
+    private double? _pausedAt;
+    private double _pausedSeconds;
+    private double Now => (_pausedAt ?? _seconds()) - _pausedSeconds;
 
     public FlightWallet Wallet { get; }
     public Guid RoundId { get; private set; }
@@ -28,10 +31,11 @@ internal sealed class CrashGame
     public decimal Payout { get; private set; }
     public decimal Bet => _ticket?.Bet ?? 0;
     public bool HasBet => _ticket != null;
+    public bool IsPaused => _pausedAt.HasValue;
     public bool HasLiveBet => Phase == FlightPhase.Flying && HasBet && CashedAt == 0;
-    public double FlightSeconds => Math.Max(0, _seconds() - _launchAt);
-    public double BoardingLeft => Phase == FlightPhase.Boarding ? Math.Clamp(_launchAt - _seconds(), 0, BoardingSeconds) : 0;
-    public double CrashAge => Phase == FlightPhase.Crashed ? Math.Max(0, _seconds() - _crashedAt) : 0;
+    public double FlightSeconds => Math.Max(0, Now - _launchAt);
+    public double BoardingLeft => Phase == FlightPhase.Boarding ? Math.Clamp(_launchAt - Now, 0, BoardingSeconds) : 0;
+    public double CrashAge => Phase == FlightPhase.Crashed ? Math.Max(0, Now - _crashedAt) : 0;
 
     public CrashGame(FlightWallet wallet, Func<double>? seconds = null, Func<decimal>? drawCrash = null)
     {
@@ -46,7 +50,7 @@ internal sealed class CrashGame
     public bool Board(decimal bet, decimal autoCashout, DateTime localNow, Guid? expectedRound = null)
     {
         Update();
-        if (Phase != FlightPhase.Boarding || HasBet || expectedRound.HasValue && expectedRound != RoundId)
+        if (IsPaused || Phase != FlightPhase.Boarding || HasBet || expectedRound.HasValue && expectedRound != RoundId)
             return false;
         Wallet.RefreshDailyGrant(localNow);
         _ticket = Wallet.PlaceBet(bet, _crashAt, autoCashout);
@@ -69,7 +73,8 @@ internal sealed class CrashGame
 
     public void Update()
     {
-        double now = _seconds();
+        if (IsPaused) return;
+        double now = Now;
         if (Phase == FlightPhase.Crashed)
         {
             // After a suspended app/late tick, settle the actual flight and
@@ -103,7 +108,7 @@ internal sealed class CrashGame
     public bool CashOut(Guid? expectedRound = null)
     {
         Update();
-        if (!HasLiveBet || expectedRound.HasValue && expectedRound != RoundId) return false;
+        if (IsPaused || !HasLiveBet || expectedRound.HasValue && expectedRound != RoundId) return false;
         Collect(Multiplier);
         return true;
     }
@@ -113,6 +118,20 @@ internal sealed class CrashGame
         decimal payout = Wallet.CashOut(_ticket!.Id, multiplier);
         CashedAt = multiplier;
         Payout = payout;
+    }
+
+    public void Pause()
+    {
+        if (IsPaused) return;
+        Update();
+        _pausedAt = _seconds();
+    }
+
+    public void Resume()
+    {
+        if (_pausedAt is not { } pausedAt) return;
+        _pausedSeconds += Math.Max(0, _seconds() - pausedAt);
+        _pausedAt = null;
     }
 
     public static double SecondsFor(decimal multiplier) => Math.Log((double)multiplier) / GrowthRate;

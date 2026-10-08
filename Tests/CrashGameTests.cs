@@ -420,6 +420,68 @@ public sealed class CrashGameTests : IDisposable
         Assert.All(wallet.History, result => Assert.Equal(1.02m, result.Payout));
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(6)]
+    [InlineData(12)]
+    public void PausingFreezesBoardingFlightAndResultTimersUntilResumed(double pauseAt)
+    {
+        var wallet = Wallet();
+        var game = Game(wallet);
+        _clock = pauseAt;
+        game.Pause();
+        var phase = game.Phase;
+        var round = game.RoundId;
+        var multiplier = game.Multiplier;
+        var flightSeconds = game.FlightSeconds;
+        var boardingLeft = game.BoardingLeft;
+        var crashAge = game.CrashAge;
+        int history = wallet.History.Count;
+        _clock += 86400;
+        game.Pause(); // Repeated focus notifications must not reset the pause.
+        game.Update();
+        Assert.True(game.IsPaused);
+        Assert.Equal(phase, game.Phase);
+        Assert.Equal(round, game.RoundId);
+        Assert.Equal(multiplier, game.Multiplier);
+        Assert.Equal(flightSeconds, game.FlightSeconds);
+        Assert.Equal(boardingLeft, game.BoardingLeft);
+        Assert.Equal(crashAge, game.CrashAge);
+        Assert.Equal(history, wallet.History.Count);
+        Assert.False(game.Board(10, 0, _today));
+        Assert.False(game.CashOut());
+        game.Resume();
+        game.Resume();
+        game.Update();
+        Assert.False(game.IsPaused);
+        Assert.Equal(phase, game.Phase);
+        Assert.Equal(round, game.RoundId);
+        Assert.Equal(multiplier, game.Multiplier);
+        Assert.Equal(boardingLeft, game.BoardingLeft, 6);
+        Assert.Equal(crashAge, game.CrashAge, 6);
+    }
+
+    [Fact]
+    public void APausedBetResumesItsAutomaticCashoutWithoutChargingOrPayingTwice()
+    {
+        var wallet = Wallet();
+        var game = Game(wallet, 4);
+        Assert.True(game.Board(10, 2, _today));
+        _clock = CrashGame.BoardingSeconds + CrashGame.SecondsFor(1.5m);
+        game.Pause();
+        _clock += 3600;
+        game.Update();
+        Assert.Equal(90, wallet.Balance);
+        Assert.Equal(0, game.CashedAt);
+        game.Resume();
+        _clock += CrashGame.SecondsFor(2) - CrashGame.SecondsFor(1.5m) + 0.001;
+        game.Update();
+        Assert.Equal(2, game.CashedAt);
+        Assert.Equal(110, wallet.Balance);
+        game.Update();
+        Assert.Equal(110, wallet.Balance);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_directory)) Directory.Delete(_directory, recursive: true);
