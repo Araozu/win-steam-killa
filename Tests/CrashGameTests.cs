@@ -8,30 +8,31 @@ public sealed class CrashGameTests : IDisposable
     private readonly DateTime _today = new(2026, 10, 8, 12, 0, 0);
     private double _clock;
     private string WalletPath => Path.Combine(_directory, "wallet.json");
-    private FlightWallet Wallet() => new(WalletPath, _today);
+    private FlightWallet Wallet() => WalletFixture.Open(WalletPath, _today);
     private CrashGame Game(FlightWallet wallet, decimal crashAt = 3) => new(wallet, () => _clock, () => crashAt);
 
     [Fact]
-    public void DailyGrantIsOncePerLogicalDayAndSurvivesReopening()
+    public void WeeklyGrantIsOncePerMondayResetAndSurvivesReopening()
     {
-        var wallet = Wallet();
-        Assert.Equal(100, wallet.Balance);
-        Assert.False(wallet.RefreshDailyGrant(_today));
-        Assert.Equal(100, Wallet().Balance);
-        Assert.False(wallet.RefreshDailyGrant(_today.Date.AddDays(1).AddHours(2)));
-        Assert.True(wallet.RefreshDailyGrant(_today.Date.AddDays(1).AddHours(3)));
-        Assert.Equal(200, wallet.Balance);
-        Assert.False(wallet.RefreshDailyGrant(_today));
-        Assert.Equal(200, wallet.Balance);
+        var wallet = new FlightWallet(WalletPath, _today);
+        Assert.Equal(30, wallet.Balance);
+        Assert.False(wallet.RefreshWeeklyGrant(_today));
+        Assert.Equal(30, Wallet().Balance);
+        var nextMonday = new DateTime(2026, 10, 12, 3, 0, 0);
+        Assert.False(wallet.RefreshWeeklyGrant(nextMonday.AddTicks(-1)));
+        Assert.True(wallet.RefreshWeeklyGrant(nextMonday));
+        Assert.Equal(60, wallet.Balance);
+        Assert.False(wallet.RefreshWeeklyGrant(_today));
+        Assert.Equal(60, wallet.Balance);
     }
 
     [Fact]
-    public void OfflineDaysGrantOnlyCurrentDayAndExistingCoinsCarryOver()
+    public void OfflineWeeksGrantOnlyCurrentWeekAndExistingCoinsCarryOver()
     {
-        var wallet = Wallet();
-        Assert.True(wallet.RefreshDailyGrant(_today.AddDays(10)));
-        Assert.Equal(200, wallet.Balance);
-        Assert.False(wallet.RefreshDailyGrant(_today.AddDays(1)));
+        var wallet = new FlightWallet(WalletPath, _today);
+        Assert.True(wallet.RefreshWeeklyGrant(_today.AddDays(28)));
+        Assert.Equal(60, wallet.Balance);
+        Assert.False(wallet.RefreshWeeklyGrant(_today.AddDays(7)));
     }
 
     [Fact]
@@ -227,10 +228,10 @@ public sealed class CrashGameTests : IDisposable
         var wallet = Wallet();
         var game = Game(wallet);
         Assert.True(game.Board(10, 2, _today));
-        wallet.RefreshDailyGrant(_today.AddDays(1));
+        wallet.RefreshWeeklyGrant(_today.AddDays(7));
         _clock = 100;
         game.Update();
-        Assert.Equal(210, wallet.Balance);
+        Assert.Equal(140, wallet.Balance);
         Assert.Equal(10, Assert.Single(wallet.History).Bet);
     }
 

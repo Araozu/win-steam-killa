@@ -51,8 +51,9 @@ it flies away. The animated sky, plane, glowing trail, and effects use WPF's
 Direct3D-backed graphics inside the WinForms window; no extra graphics runtime
 or asset downloads are needed.
 
-- Start with **100 coins**. Another **100 coins** arrives once per logical day
-  at **03:00 local**. Unspent coins carry over; missed offline days don't stack.
+- Start with **30 coins**. Another **30 coins** arrives once per week at
+  **Monday 03:00 local**, alongside the Dota weekly reset. Unspent coins carry
+  over; missed offline weeks don't stack. Existing balances are preserved.
 - Flights run **automatically**. The final multiplier lingers for **5 seconds**,
   followed by a **5-second boarding countdown**. Enter a bet (minimum **1 coin**,
   up to two decimals), then **Board this flight** before the countdown ends.
@@ -66,14 +67,17 @@ or asset downloads are needed.
   The button shows exactly **two decimal places** with tabular digits.
   The flight continues after you cash out so you can see its final multiplier.
   Recent flights have tooltips showing your bet and payout.
-- **Sell 1 coin → add 1 minute to today's budget.** **Buy 10 coins → spend
-  11 minutes of today's remaining budget.** The buttons below the game update
+- Choose how many whole coins to sell: **each coin adds 1 minute to today's
+  budget.** **Buy 1 coin → spend 1 minute 6 seconds** of today's remaining
+  budget. The buttons below the game update
   the coin balance and Today bar immediately. Trades require the updated Windows
   service; held bets cannot be sold, and you cannot spend time already played.
   Saved transactions recover after a timeout or restart without double charges.
 - After **2 minutes without app focus**, the game pauses its clock, stops its
   update timer, and detaches rendering. Returning resumes the same countdown or
   flight. This also applies when hidden in the tray; the timer service keeps running.
+- Uncheck **Show Flight Club** above the game to hide it entirely; check it
+  again to bring it back. The choice persists across restarts.
 - Exiting/restarting retains any saved payout; an unsettled bet is lost.
   Coins and history are saved in
   `%LOCALAPPDATA%\SteamTimer\flight-wallet.json`, separately from timer state.

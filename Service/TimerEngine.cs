@@ -205,7 +205,7 @@ public class TimerEngine
     private PipeResponse ExchangeCoins(TimerState st, CoinExchangeRequest? request, DateTime nowUtc, PipeResponse resp)
     {
         Fill(resp, st, nowUtc, liveCheck: false);
-        if (request == null || request.WalletId == Guid.Empty || request.Number < 1)
+        if (request == null || request.WalletId == Guid.Empty || request.Number < 1 || !request.HasValidAmount)
             return Fail("Invalid coin exchange request.", resp);
         st.CoinExchanges.TryGetValue(request.WalletId, out var previous);
         if (previous?.Request.Number == request.Number && previous.Request == request)
@@ -218,15 +218,17 @@ public class TimerEngine
             return Fail("Coin exchange sequence does not match this wallet.", resp);
 
         string error = "";
-        int change = request.BuyCoins ? -CoinExchangeRates.PurchaseSeconds : CoinExchangeRates.SaleSeconds;
+        int change = request.BuyCoins ? -request.TimeSeconds : request.TimeSeconds;
         // Account for play since the last metering tick when checking what can
         // be spent. The worker will accrue these seconds normally on its tick.
         double unmetered = st.Running && st.CooldownUntilUtc <= nowUtc
             ? Math.Clamp((nowUtc - st.LastTickUtc).TotalSeconds, 0, MaxTickCredit.TotalSeconds) : 0;
         if (request.LogicalDay != st.LogicalDay)
             error = "Today's budget reset before this exchange. Try again for the new day.";
-        else if (request.BuyCoins && EffectiveOf(st) - st.UsedSeconds - unmetered < CoinExchangeRates.PurchaseSeconds)
-            error = "You need at least 11 minutes of today's remaining budget to buy 10 coins.";
+        else if (request.BuyCoins && EffectiveOf(st) - st.UsedSeconds - unmetered < request.TimeSeconds)
+            error = request.CoinCount == 1
+                ? "You need at least 1 minute 6 seconds of today's remaining budget to buy 1 coin."
+                : "You need at least 11 minutes of today's remaining budget to complete this saved 10-coin purchase.";
         else if ((long)st.CoinBudgetSeconds + change is < int.MinValue or > int.MaxValue ||
                  EffectiveOf(st) + change > int.MaxValue)
             error = "Today's budget cannot hold any more time.";
@@ -246,8 +248,10 @@ public class TimerEngine
         Fill(resp, next, nowUtc, liveCheck: true);
         resp.ExchangeReceipt = receipt;
         if (!receipt.Applied) return Fail(receipt.Error, resp);
-        resp.ActionNote = request.BuyCoins ? "Bought 10 coins for 11 minutes of today's budget."
-            : "Sold 1 coin for 1 minute of today's budget.";
+        string coins = $"{request.CoinCount} {(request.CoinCount == 1 ? "coin" : "coins")}";
+        string time = Limits.FormatGain(TimeSpan.FromSeconds(request.TimeSeconds));
+        resp.ActionNote = request.BuyCoins ? $"Bought {coins} for {time} of today's budget."
+            : $"Sold {coins} for {time} of today's budget.";
         return resp;
     }
 
@@ -414,6 +418,7 @@ public class TimerEngine
         r.AdvanceDeductionSeconds = st.AdvanceDeductionSeconds;
         r.CoinBudgetSeconds = st.CoinBudgetSeconds;
         r.SupportsCoinExchange = true;
+        r.CoinExchangeVersion = CoinExchangeRates.ProtocolVersion;
         r.TomorrowBaseSeconds = TomorrowBaseFor(st.LogicalDay);
         r.NextBorrowEffectiveness = Limits.NextBorrowEffectiveness(st.BorrowCount);
         r.NextBorrowGainSeconds = (int)Limits.BorrowGainForNumber(st.BorrowCount + 1).TotalSeconds;

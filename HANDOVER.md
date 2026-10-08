@@ -96,12 +96,16 @@ Self-control grade (user keeps Admin): friction, not fortress.
    bug can never stop balloons again.
 
 ## Verified so far
-- Flight Club verification (2026-10-08):
+- Flight Club exchange/idle-pause verification (2026-10-08), before the later
+  weekly allowance and trade-quantity changes:
   `dotnet test SteamTimer.slnx -c Release --verbosity minimal` — 65 passed;
   `dotnet build SteamTimer.slnx -c Release` — 0 warnings/errors;
   Windows x64 app/service publishes to `publish/App` and `publish/Service`
   succeeded. Native game-state, DPI-scaled, and scrollable-host screenshots inspected. Details and screenshot
   capture commands are in `FLIGHT_CLUB.md`.
+- Weekly allowance and trade-quantity follow-up: existing test expectations
+  updated, but tests deliberately not run at the user's request. Release build
+  completed with 0 warnings/errors; app and service publishes succeeded.
 - `dotnet build SteamTimer.slnx` clean (0 warn/error) — including after the v3
   rework (2h sessions, len-based cooldown, 30m carryover, Dota 9h/week,
   info-only UI).
@@ -125,10 +129,12 @@ Self-control grade (user keeps Admin): friction, not fortress.
   suspension settles the current flight once, then gives a fresh boarding
   window instead of replaying missed rounds.
   `FlightWallet.cs` atomically persists the per-user coin wallet at
-  `%LOCALAPPDATA%\SteamTimer\flight-wallet.json` (not service state): 100 coins
-  per 03:00 logical day, carry-over balance, no stacked offline grants, 8-round
+  `%LOCALAPPDATA%\SteamTimer\flight-wallet.json` (not service state): 30 coins
+  per Monday 03:00 local week (same as Dota), carry-over balance, no stacked offline grants, 8-round
   history. Stakes are saved before takeoff; restart recovers saved payouts and
   forfeits unpaid pending bets. Never reset a corrupt wallet silently.
+  `LastGrantDay` remains in wallet format v1, now storing the week's Monday;
+  legacy daily grant dates count for their containing week without resetting balances.
   New payouts round UP to the next cent via `PayoutFor`; existing round-down
   saved results/pending payouts stay valid. The cash-out button always formats
   gains with two decimals and tabular digits.
@@ -137,7 +143,10 @@ Self-control grade (user keeps Admin): friction, not fortress.
   saves `CoinBudgetSeconds` and its latest `CoinExchanges` receipt per wallet
   together, before replying. Receipts survive day reset, preventing duplicate
   changes after lost replies or restarts. Rejected sales refund reserved coins.
-  Sell 1 coin for +60s today; buy 10 coins for -660s of remaining time today.
+  Choose a whole-coin sale quantity for +60s per coin today; buy one coin for
+  -66s of remaining time today. `CoinExchangeVersion=2` gates new trades so an
+  older service cannot misinterpret quantities. Requests without a `Coins`
+  field retain the legacy buy-10/sell-1 meaning for pending-trade recovery.
   Trades do not change played time, tomorrow's debt, session/cooldown, or Dota.
   A zero effective budget must never fall back to the base for carryover.
   `FlightGameView.xaml(.cs)` is embedded beneath the existing controls through

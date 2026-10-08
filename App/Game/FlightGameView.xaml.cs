@@ -100,7 +100,7 @@ public partial class FlightGameView : Wpf.UserControl, IDisposable
             if (_game == null || _error != null) return;
             _game.Update();
             // Loop during the inactivity grace period, including while hidden.
-            _game.Wallet.RefreshDailyGrant(DateTime.Now);
+            _game.Wallet.RefreshWeeklyGrant(DateTime.Now);
             if (_game.Wallet.PendingExchange != null && !_exchangeBusy && DateTime.UtcNow >= _exchangeRetryAt)
                 _ = ResolveExchangeAsync();
             _tick.Interval = TimeSpan.FromMilliseconds(IsVisible ? 50 : 250);
@@ -137,11 +137,12 @@ public partial class FlightGameView : Wpf.UserControl, IDisposable
             MessageText.Text = _error;
             MessageText.Foreground = Ink("#FF9BAC");
             SellCoinsButton.IsEnabled = BuyCoinsButton.IsEnabled = false;
+            SellCoinsInput.IsEnabled = false;
             return;
         }
         var g = _game;
         BalanceText.Text = $"● {Coins(g.Wallet.Balance)}";
-        BalanceText.ToolTip = $"100 coins daily at 03:00. Next grant: {LogicalDay.NextResetLocal(DateTime.Now):ddd HH:mm}. Coins carry over.";
+        BalanceText.ToolTip = $"{FlightWallet.WeeklyCoins:0} coins weekly, Monday at 03:00. Next grant: {Limits.NextWeeklyResetLocal(DateTime.Now):ddd HH:mm}. Coins carry over.";
         bool newRound = _shownRoundId != g.RoundId;
         _shownRoundId = g.RoundId;
         _boardingAction = !g.IsPaused && g.Phase == FlightPhase.Boarding && !g.HasBet;
@@ -176,7 +177,7 @@ public partial class FlightGameView : Wpf.UserControl, IDisposable
             MessageText.Text = $"Flights run nonstop. Board during the {CrashGame.BoardingSeconds:0}-second countdown.";
         }
         if (g.Wallet.Balance < 1 && !g.HasLiveBet)
-            MessageText.Text = $"Keep watching · next 100 coins {LogicalDay.NextResetLocal(DateTime.Now):ddd 'at' HH:mm}.";
+            MessageText.Text = $"Keep watching · next {FlightWallet.WeeklyCoins:0} coins {Limits.NextWeeklyResetLocal(DateTime.Now):ddd 'at' HH:mm}.";
         if (g.IsPaused)
             MessageText.Text = "Game paused after 2 minutes away. Return to this window to resume.";
         // Rebuild only when a flight finishes, not on every animation frame.
@@ -213,18 +214,47 @@ public partial class FlightGameView : Wpf.UserControl, IDisposable
     private void RefreshExchangeControls()
     {
         bool available = _game != null && !_game.IsPaused && _error == null && !_exchangeBusy && _game.Wallet.PendingExchange == null &&
-            _budgetStatus?.SupportsCoinExchange == true && _budgetStatus.LogicalDay == LogicalDay.ForLocal(DateTime.Now);
+            _budgetStatus?.SupportsCoinExchange == true && _budgetStatus.CoinExchangeVersion >= CoinExchangeRates.ProtocolVersion &&
+            _budgetStatus.LogicalDay == LogicalDay.ForLocal(DateTime.Now);
+        bool validSale = TrySaleCoins(out int saleCoins);
+        SellCoinsInput.IsEnabled = _game != null && !_game.IsPaused && _error == null && !_exchangeBusy && _game.Wallet.PendingExchange == null;
+        SellCoinsButton.Content = validSale ? $"SELL · +{saleCoins}m" : "SELL COINS";
+        if (validSale)
+        {
+            string coins = $"{saleCoins} {(saleCoins == 1 ? "coin" : "coins")}";
+            string time = $"{saleCoins} {(saleCoins == 1 ? "minute" : "minutes")}";
+            SellCoinsButton.ToolTip = $"Sell {coins} to add {time} to today's Steam budget.";
+            System.Windows.Automation.AutomationProperties.SetName(SellCoinsButton, $"Sell {coins} for {time} today");
+        }
         double remaining = _budgetStatus?.RemainingSeconds ?? 0;
         if (_budgetStatus?.Running == true && !_budgetStatus.InCooldown)
             remaining = Math.Max(0, remaining - (DateTime.UtcNow - _budgetReceivedAt).TotalSeconds);
-        SellCoinsButton.IsEnabled = available && _game!.Wallet.Balance >= CoinExchangeRates.SoldCoins;
+        SellCoinsButton.IsEnabled = available && validSale && _game!.Wallet.Balance >= saleCoins;
         BuyCoinsButton.IsEnabled = available && remaining >= CoinExchangeRates.PurchaseSeconds &&
             _game!.Wallet.Balance <= FlightWallet.MaximumBalance - CoinExchangeRates.BoughtCoins;
         ExchangeMessageText.Text = _game?.Wallet.PendingExchange != null
             ? _exchangeMessage ?? "Exchange pending · waiting for the service."
             : _exchangeMessage ?? (_budgetStatus == null ? "Connect to the SteamTimer service to trade coins."
-                : !_budgetStatus.SupportsCoinExchange ? "Update the SteamTimer service to trade coins."
+                : !_budgetStatus.SupportsCoinExchange || _budgetStatus.CoinExchangeVersion < CoinExchangeRates.ProtocolVersion
+                    ? "Update the SteamTimer service to trade coins."
+                : !validSale ? "Enter a positive whole number of coins to sell."
                 : $"Today: {Limits.FormatGain(TimeSpan.FromSeconds(remaining))} remaining · trades use today's budget.");
+    }
+
+    private bool TrySaleCoins(out int coins)
+    {
+        coins = 0;
+        if (!TryAmount(SellCoinsInput.Text, out decimal amount) || amount < CoinExchangeRates.SoldCoins ||
+            amount > CoinExchangeRates.MaximumSaleCoins || decimal.Truncate(amount) != amount) return false;
+        coins = (int)amount;
+        return true;
+    }
+
+    private void SaleAmountChanged(object sender, Wpf.TextChangedEventArgs e)
+    {
+        if (SellCoinsButton == null || BuyCoinsButton == null || ExchangeMessageText == null) return;
+        _exchangeMessage = null;
+        RefreshExchangeControls();
     }
 
     private async void SellCoinsClick(object sender, RoutedEventArgs e) => await ExchangeAsync(buyCoins: false);
@@ -234,11 +264,13 @@ public partial class FlightGameView : Wpf.UserControl, IDisposable
     {
         if (_disposed || _game == null || _error != null || _exchangeBusy ||
             !(buyCoins ? BuyCoinsButton.IsEnabled : SellCoinsButton.IsEnabled)) return;
+        int coins = 1;
+        if (!buyCoins && !TrySaleCoins(out coins)) return;
         try
         {
             _game.Update();
-            _game.Wallet.RefreshDailyGrant(DateTime.Now);
-            _game.Wallet.BeginExchange(buyCoins, DateTime.Now);
+            _game.Wallet.RefreshWeeklyGrant(DateTime.Now);
+            _game.Wallet.BeginExchange(buyCoins, DateTime.Now, coins);
             _exchangeMessage = "Exchanging…";
             RefreshView();
             await ResolveExchangeAsync();
@@ -274,8 +306,10 @@ public partial class FlightGameView : Wpf.UserControl, IDisposable
                 if (response?.ExchangeReceipt is { } receipt && receipt.Request == pending)
                 {
                     _game.Wallet.CompleteExchange(receipt);
+                    string coins = $"{pending.CoinCount} {(pending.CoinCount == 1 ? "coin" : "coins")}";
+                    string time = Limits.FormatGain(TimeSpan.FromSeconds(pending.TimeSeconds));
                     _exchangeMessage = receipt.Applied
-                        ? pending.BuyCoins ? "Bought 10 coins · spent 11m of today's budget." : "Sold 1 coin · added 1m to today's budget."
+                        ? pending.BuyCoins ? $"Bought {coins} · spent {time} of today's budget." : $"Sold {coins} · added {time} to today's budget."
                         : receipt.Error;
                     SetBudgetStatus(response);
                     BudgetChanged?.Invoke(response);

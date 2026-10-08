@@ -12,13 +12,13 @@ public sealed class CoinExchangeTests : IDisposable
     private string WalletPath => Path.Combine(_directory, "wallet.json");
     private string BudgetPath => Path.Combine(_directory, "budget.json");
     private StateStore Store => new(BudgetPath);
-    private FlightWallet Wallet() => new(WalletPath, _localNow);
+    private FlightWallet Wallet() => WalletFixture.Open(WalletPath, _localNow);
     private TimerEngine Engine() => new(NullLogger<TimerEngine>.Instance, Store, () => _localNow.ToUniversalTime());
     private PipeResponse Send(TimerEngine engine, CoinExchangeRequest request)
         => engine.Handle(new PipeRequest { Cmd = CoinExchangeRates.Command, Exchange = request });
 
     [Fact]
-    public void SellingOneCoinAddsOneMinuteAndBuyingTenCostsElevenMinutes()
+    public void SellingOneCoinAddsOneMinuteAndBuyingOneCostsSixtySixSeconds()
     {
         var wallet = Wallet();
         var engine = Engine();
@@ -32,11 +32,11 @@ public sealed class CoinExchangeTests : IDisposable
         var bought = Send(engine, wallet.BeginExchange(true, _localNow));
         Assert.True(bought.Ok);
         wallet.CompleteExchange(bought.ExchangeReceipt!);
-        Assert.Equal(109, wallet.Balance);
-        Assert.Equal(4800, bought.RemainingSeconds);
-        Assert.Equal(-600, bought.CoinBudgetSeconds);
-        Assert.Equal(109, Wallet().Balance);
-        Assert.Equal(-600, Store.Load()!.CoinBudgetSeconds);
+        Assert.Equal(100, wallet.Balance);
+        Assert.Equal(5394, bought.RemainingSeconds);
+        Assert.Equal(-6, bought.CoinBudgetSeconds);
+        Assert.Equal(100, Wallet().Balance);
+        Assert.Equal(-6, Store.Load()!.CoinBudgetSeconds);
     }
 
     [Theory]
@@ -54,23 +54,23 @@ public sealed class CoinExchangeTests : IDisposable
         Assert.Equal(first.CoinBudgetSeconds, retried.CoinBudgetSeconds);
         reopened.CompleteExchange(retried.ExchangeReceipt!);
         Assert.Null(Wallet().PendingExchange);
-        Assert.Equal(buyCoins ? 110 : 99, Wallet().Balance);
+        Assert.Equal(buyCoins ? 101 : 99, Wallet().Balance);
         Assert.Throws<InvalidOperationException>(() => reopened.CompleteExchange(retried.ExchangeReceipt!));
-        Assert.Equal(buyCoins ? 110 : 99, reopened.Balance);
+        Assert.Equal(buyCoins ? 101 : 99, reopened.Balance);
     }
 
     [Fact]
     public void InsufficientRemainingTimeRejectsThePurchaseWithoutCreatingCoins()
     {
         var wallet = Wallet();
-        SeedBudget(used: 4800);
+        SeedBudget(used: 5350);
         var response = Send(Engine(), wallet.BeginExchange(true, _localNow));
         Assert.False(response.Ok);
         Assert.False(response.ExchangeReceipt!.Applied);
-        Assert.Contains("11 minutes", response.Error);
+        Assert.Contains("1 minute 6 seconds", response.Error);
         wallet.CompleteExchange(response.ExchangeReceipt);
         Assert.Equal(100, Wallet().Balance);
-        Assert.Equal(600, response.RemainingSeconds);
+        Assert.Equal(50, response.RemainingSeconds);
         Assert.Equal(0, Store.Load()!.CoinBudgetSeconds);
         Assert.Null(wallet.PendingExchange);
     }
@@ -78,7 +78,7 @@ public sealed class CoinExchangeTests : IDisposable
     [Fact]
     public void ARejectedPurchaseStaysRejectedAfterMoreTimeIsAdded()
     {
-        SeedBudget(used: 4800);
+        SeedBudget(used: 5350);
         var wallet = Wallet();
         var engine = Engine();
         var request = wallet.BeginExchange(true, _localNow);
@@ -95,7 +95,7 @@ public sealed class CoinExchangeTests : IDisposable
     [Fact]
     public void UnmeteredActivePlayCannotBeSpentOnCoins()
     {
-        SeedBudget(used: 4740, running: true, tickAge: 15);
+        SeedBudget(used: 5334, running: true, tickAge: 15);
         var response = Send(Engine(), Wallet().BeginExchange(true, _localNow));
         Assert.False(response.Ok);
         Assert.Equal(0, response.CoinBudgetSeconds);
@@ -134,7 +134,7 @@ public sealed class CoinExchangeTests : IDisposable
         Assert.Equal(before.SessionStartUtc, after.SessionStartUtc);
         Assert.Equal(before.SessionUsedSeconds, after.SessionUsedSeconds);
         Assert.Equal(before.UsedSeconds, after.UsedSeconds);
-        Assert.Equal(4640, response.RemainingSeconds);
+        Assert.Equal(5234, response.RemainingSeconds);
     }
 
     [Fact]
@@ -148,8 +148,8 @@ public sealed class CoinExchangeTests : IDisposable
         Assert.Equal(0, response.CoinBudgetSeconds);
         wallet.CompleteExchange(response.ExchangeReceipt!);
         Assert.Equal(100, wallet.Balance);
-        wallet.RefreshDailyGrant(_localNow);
-        Assert.Equal(200, wallet.Balance);
+        Assert.False(wallet.RefreshWeeklyGrant(_localNow));
+        Assert.Equal(100, wallet.Balance);
     }
 
     [Fact]
@@ -165,7 +165,7 @@ public sealed class CoinExchangeTests : IDisposable
         Assert.Equal(0, response.CoinBudgetSeconds);
         Assert.Equal(5400 + 1800, response.BudgetSeconds);
         reopened.CompleteExchange(response.ExchangeReceipt!);
-        Assert.Equal(210, Wallet().Balance);
+        Assert.Equal(101, Wallet().Balance);
     }
 
     [Fact]
@@ -173,7 +173,7 @@ public sealed class CoinExchangeTests : IDisposable
     {
         SeedBudget();
         var state = Store.Load()!;
-        state.BaseBudgetSeconds = 660;
+        state.BaseBudgetSeconds = 66;
         Store.Save(state);
         var response = Send(Engine(), Wallet().BeginExchange(true, _localNow));
         Assert.True(response.Ok);
@@ -243,14 +243,14 @@ public sealed class CoinExchangeTests : IDisposable
     public void ReservedCoinsCannotBeBetAndAnotherTradeCannotStartUntilCompletion()
     {
         var wallet = Wallet();
-        var request = wallet.BeginExchange(false, _localNow);
+        var request = wallet.BeginExchange(false, _localNow, 3);
         Assert.Throws<ArgumentOutOfRangeException>(() => wallet.PlaceBet(100, 3, 0));
         Assert.Throws<InvalidOperationException>(() => wallet.BeginExchange(true, _localNow));
-        var ticket = wallet.PlaceBet(99, 3, 0);
+        var ticket = wallet.PlaceBet(97, 3, 0);
         wallet.CompleteExchange(new CoinExchangeReceipt(request, false, "Reset"));
-        Assert.Equal(1, wallet.Balance);
-        Assert.Equal(148.50m, wallet.CashOut(ticket.Id, 1.5m));
-        Assert.Equal(149.50m, wallet.Balance);
+        Assert.Equal(3, wallet.Balance);
+        Assert.Equal(145.50m, wallet.CashOut(ticket.Id, 1.5m));
+        Assert.Equal(148.50m, wallet.Balance);
     }
 
     [Fact]
@@ -265,7 +265,7 @@ public sealed class CoinExchangeTests : IDisposable
         var full = Wallet();
         Assert.Throws<InvalidOperationException>(() => full.BeginExchange(true, _localNow));
         var sale = full.BeginExchange(false, _localNow);
-        full.RefreshDailyGrant(_localNow.AddDays(1));
+        full.RefreshWeeklyGrant(_localNow.AddDays(7));
         full.CompleteExchange(new CoinExchangeReceipt(sale, false, "Reset"));
         Assert.Equal(FlightWallet.MaximumBalance, full.Balance);
     }

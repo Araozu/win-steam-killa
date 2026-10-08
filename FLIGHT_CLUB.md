@@ -45,29 +45,31 @@ The wallet retains eight flights in total.
 ### Payout example
 
 A **10-coin** bet cashed out at **2.00×** returns **20 coins**, including the
-original stake. Starting from 100 coins, the balance becomes 90 when you bet
-and 110 when you collect. Crashing before collection leaves it at 90.
+original stake. Starting from 30 coins, the balance becomes 20 when you bet
+and 40 when you collect. Crashing before collection leaves it at 20.
 
 A **1.01-coin** bet cashed out at **1.50×** returns **1.52 coins**: the exact
 product is 1.515, rounded upward to the next cent. Products already at an exact
 cent are unchanged.
 
-## Daily coins
+## Weekly coins
 
-- A new wallet starts with **100 coins**.
-- Another **100 coins** is granted once per logical day. Like the timer, the
-  logical day runs from **03:00 local** to **03:00 local** the next day.
-- Unspent coins and winnings carry over. Missed days while the app is closed
-  do not accumulate allowances; reopening grants only the current day's
+- A new wallet starts with **30 coins**.
+- Another **30 coins** is granted once per week, resetting **Monday at 03:00
+  local**, on the same schedule as the Dota weekly budget.
+- Unspent coins and winnings carry over. Missed weeks while the app is closed
+  do not accumulate allowances; reopening grants only the current week's
   allowance if it has not already been claimed.
 - Moving the clock back to an already-claimed date does not grant more coins.
-- A daily grant during a flight adds to the balance without changing the bet.
+- A weekly grant during a flight adds to the balance without changing the bet.
+- Existing balances are preserved. An earlier daily grant counts as already
+  claiming its week, so upgrading does not add a second allowance that week.
 - If fewer than 1 coin remains after a flight, the game shows the next grant
   time and disables boarding until enough coins are available. Flights keep
   running so you can watch them.
 - Balances are capped at **1,000,000,000,000 coins**.
 
-Hover over the coin balance to see the daily allowance and next reset time.
+Hover over the coin balance to see the weekly allowance and next reset time.
 
 ## Trading coins and today's time
 
@@ -75,11 +77,13 @@ The two buttons below the game connect the wallet to the SteamTimer service:
 
 | Button | Coin change | Today's budget change |
 | --- | --- | --- |
-| **Sell 1 coin** | −1 available coin | +1 minute |
-| **Buy 10 coins** | +10 coins | −11 minutes |
+| **Sell coins** (enter a quantity) | −the chosen number of available coins | +1 minute per coin |
+| **Buy 1** | +1 coin | −1 minute 6 seconds |
 
-Each click performs one trade. Purchases require at least 11 minutes of today's
-remaining budget. Sales use available coins, excluding coins already on board.
+Each click performs one trade. Enter a positive whole number in **SELL · COINS**;
+for example, selling 5 coins adds 5 minutes. Purchases are one coin at a time and
+require at least 1 minute 6 seconds of today's remaining budget. Sales use
+available coins, excluding coins already on board.
 You can trade during a flight; trading does not alter its stake or restart it.
 The coin balance and Today bar update when the service confirms the saved trade.
 Purchases cannot overfill the wallet.
@@ -89,7 +93,7 @@ to played time. Selling coins can reopen an exhausted daily budget, but the norm
 2-hour session cap, cooldowns, and Dota weekly limit still apply. At 03:00 the net
 trade adjustment resets; leftover time follows the existing 30-minute carryover cap.
 
-Trades require the updated service. If it is unavailable, new trades are disabled
+Trades require the updated service with quantity support. If it is unavailable, new trades are disabled
 while flights still work. An in-flight trade with a lost reply remains pending:
 the wallet reserves sold coins, and retries the same request every 5 seconds
 while the game is running. Reopening the app also recovers a pending trade.
@@ -97,6 +101,8 @@ The service saves each wallet's latest numbered receipt with the budget change,
 so retries cannot trade twice. A trade not applied before the 03:00 reset is
 rejected and any reserved coins are refunded. A trade already applied before
 reset can still be confirmed afterward without changing the new day's budget.
+Previously saved 10-coin purchases retain their original 11-minute cost and
+10-coin credit when recovered; new purchases are always one coin.
 
 ## Round rules and timing
 
@@ -144,6 +150,13 @@ any remaining bet is collected automatically when the plane reaches it.
 
 ## Hiding, exiting, and saved state
 
+Uncheck **Show Flight Club** above the game to hide it; check it again to
+bring it back. The choice is saved per Windows user at
+`%LOCALAPPDATA%\SteamTimer\app-settings.json` and restored on launch.
+Hiding collapses the panel so the window shrinks. The wallet is untouched,
+and the game model keeps ticking slowly while hidden with rendering detached,
+then refreshes when shown.
+
 Closing the main window hides it to the tray. Flights and auto-cash-out continue
 during the inactivity grace period. After **2 minutes without app focus**, the
 game freezes its current countdown, multiplier, result timer, and active bet.
@@ -168,7 +181,7 @@ It is separate from the service's
 | --- | --- |
 | `Version` | Wallet format version, currently 1 |
 | `Balance` | Available coins, represented as a decimal |
-| `LastGrantDay` | Most recent logical date that received its allowance |
+| `LastGrantDay` | Monday of the last granted week; legacy daily dates count for their containing week |
 | `LastBet` / `LastAutoCashout` | Settings used to place the last bet |
 | `Pending` | Active flight ID, stake, crash point, auto target, and saved payout |
 | `History` | Up to eight completed or interrupted flights, newest first; a zero stake denotes spectating |
@@ -217,11 +230,12 @@ through a session-local mutex and activation event.
 | File | Responsibility |
 | --- | --- |
 | [CrashGame.cs](App/Game/CrashGame.cs) | Round state, randomness, monotonic timing, cash-out ordering |
-| [FlightWallet.cs](App/Game/FlightWallet.cs) | Daily grants, decimal accounting, atomic persistence, recovery |
+| [FlightWallet.cs](App/Game/FlightWallet.cs) | Weekly grants, decimal accounting, atomic persistence, recovery |
 | [FlightGameView.xaml](App/Game/FlightGameView.xaml) | Game layout, controls, and visual styles |
 | [FlightGameView.xaml.cs](App/Game/FlightGameView.xaml.cs) | Input validation, controls, HUD, history, and model timer |
 | [FlightScene.cs](App/Game/FlightScene.cs) | Animated vector graphics and composition lifecycle |
-| [MainForm.cs](App/MainForm.cs) | WinForms host, scrolling, DPI scaling, and disposal |
+| [MainForm.cs](App/MainForm.cs) | WinForms host, scrolling, DPI scaling, Flight Club show/hide toggle, and disposal |
+| [AppSettings.cs](App/AppSettings.cs) | Per-user UI preferences (Flight Club visibility) with atomic persistence |
 | [Program.cs](App/Program.cs) | Single-instance startup and window activation |
 | [CrashGameTests.cs](Tests/CrashGameTests.cs) | Wallet and round regression tests |
 | [FlightViewTests.cs](Tests/FlightViewTests.cs) | STA native rendering and interaction test |
@@ -258,10 +272,16 @@ $env:STEAMTIMER_TEST_SCREENSHOTS = "$env:TEMP\SteamTimer-flight-evidence"
 dotnet test SteamTimer.slnx -c Release --verbosity minimal
 ```
 
-Verification on **2026-10-08**: **65 tests passed**, Release solution build
+Verification on **2026-10-08**, before the weekly allowance and trade-quantity changes:
+**65 tests passed**, Release solution build
 completed with **0 warnings and 0 errors**, and the Windows x64 app published
 successfully alongside the updated service. Screenshots of flight states, scaled
 graphics, and the actual host window were also inspected.
+
+For the subsequent weekly allowance and trade-quantity changes, test expectations
+were updated but **tests were not run**, at the user's request. The Release
+solution build completed with **0 warnings and 0 errors**, and both the app and
+service were published successfully.
 
 To update the installed copy, run [Setup/install.ps1](Setup/install.ps1) as
 Administrator and reopen Steam Timer. Building or publishing alone updates

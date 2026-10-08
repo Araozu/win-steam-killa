@@ -110,15 +110,21 @@
                        TextWrapping="Wrap" VerticalAlignment="Center" />
             <Grid Grid.Row="7" Margin="0,4,0,4">
                 <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="60" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
-                <Button x:Name="SellCoinsButton" Content="SELL 1 COIN · +1m" FontSize="11" Margin="0,0,4,0"
+                <StackPanel Margin="0,0,6,0">
+                    <TextBlock Text="SELL · COINS" FontSize="8" Foreground="{StaticResource Muted}" />
+                    <TextBox x:Name="SellCoinsInput" Text="1" FontSize="12" Padding="5,2" MaxLength="8"
+                             TextChanged="SaleAmountChanged" AutomationProperties.Name="Number of coins to sell" />
+                </StackPanel>
+                <Button Grid.Column="1" x:Name="SellCoinsButton" Content="SELL · +1m" FontSize="10" Margin="0,0,4,0"
                         Click="SellCoinsClick" IsEnabled="False" AutomationProperties.Name="Sell 1 coin for 1 minute today"
                         ToolTip="Sell 1 available coin to add 1 minute to today's Steam budget." />
-                <Button Grid.Column="1" x:Name="BuyCoinsButton" Content="BUY 10 COINS · −11m" FontSize="11" Margin="4,0,0,0"
-                        Click="BuyCoinsClick" IsEnabled="False" AutomationProperties.Name="Buy 10 coins for 11 minutes today"
-                        ToolTip="Spend 11 minutes of today's remaining Steam budget to buy 10 coins." />
+                <Button Grid.Column="2" x:Name="BuyCoinsButton" Content="BUY 1 · −1m 06s" FontSize="10" Margin="4,0,0,0"
+                        Click="BuyCoinsClick" IsEnabled="False" AutomationProperties.Name="Buy 1 coin for 1 minute 6 seconds today"
+                        ToolTip="Spend 1 minute 6 seconds of today's remaining Steam budget to buy 1 coin." />
             </Grid>
             <TextBlock Grid.Row="8" x:Name="ExchangeMessageText" FontSize="10" Foreground="{StaticResource Muted}"
                        TextWrapping="Wrap" VerticalAlignment="Center" />

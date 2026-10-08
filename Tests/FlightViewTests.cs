@@ -28,7 +28,7 @@ public sealed class FlightViewTests
             try
             {
                 double clock = 0;
-                var wallet = new FlightWallet(Path.Combine(directory, "wallet.json"), DateTime.Now);
+                var wallet = WalletFixture.Open(Path.Combine(directory, "wallet.json"), DateTime.Now);
                 var game = new CrashGame(wallet, () => clock, () => 4);
                 using var view = new FlightGameView(game) { Width = 360, Height = FlightGameView.PanelHeight };
                 var window = new Window { Content = view, Width = 390, Height = FlightGameView.PanelHeight + 42, ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.CenterScreen };
@@ -139,7 +139,7 @@ public sealed class FlightViewTests
                 form.Show();
                 form.UpdateFromStatus(new PipeResponse
                 {
-                    Ok = true, SupportsCoinExchange = true, ServerNowUtc = DateTime.UtcNow,
+                    Ok = true, SupportsCoinExchange = true, CoinExchangeVersion = CoinExchangeRates.ProtocolVersion, ServerNowUtc = DateTime.UtcNow,
                     LogicalDay = LogicalDay.ForLocal(DateTime.Now), BudgetSeconds = 5400,
                     BaseBudgetSeconds = 5400, RemainingSeconds = 5400,
                     DotaBudgetSeconds = 32400, DotaRemainingSeconds = 32400,
@@ -171,7 +171,7 @@ public sealed class FlightViewTests
             try
             {
                 double clock = 0;
-                var wallet = new FlightWallet(Path.Combine(directory, "wallet.json"), DateTime.Now);
+                var wallet = WalletFixture.Open(Path.Combine(directory, "wallet.json"), DateTime.Now);
                 var game = new CrashGame(wallet, () => clock, () => 4);
                 var engine = new TimerEngine(NullLogger<TimerEngine>.Instance, new StateStore(Path.Combine(directory, "budget.json")));
                 var reply = new TaskCompletionSource<PipeResponse?>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -195,9 +195,11 @@ public sealed class FlightViewTests
                     view.SetBudgetStatus(engine.Handle(new PipeRequest { Cmd = "status" }));
                     Assert.True(sell.IsEnabled);
                     Assert.True(buy.IsEnabled);
+                    ((Wpf.TextBox)view.FindName("SellCoinsInput")).Text = "3";
                     Click(sell);
-                    Assert.Equal(99, wallet.Balance);
+                    Assert.Equal(97, wallet.Balance);
                     Assert.NotNull(wallet.PendingExchange);
+                    Assert.Equal(3, sent!.Exchange!.CoinCount);
                     Assert.False(sell.IsEnabled);
                     Assert.False(buy.IsEnabled);
                     Click(sell);
@@ -208,25 +210,26 @@ public sealed class FlightViewTests
                     reply.SetResult(engine.Handle(sent));
                     Pump();
                     Assert.Null(wallet.PendingExchange);
-                    Assert.Equal(60, changed!.CoinBudgetSeconds);
-                    Assert.Equal(5460, changed.RemainingSeconds);
-                    Assert.Contains("added 1m", ((Wpf.TextBlock)view.FindName("ExchangeMessageText")).Text);
+                    Assert.Equal(180, changed!.CoinBudgetSeconds);
+                    Assert.Equal(5580, changed.RemainingSeconds);
+                    Assert.Contains("added 3m", ((Wpf.TextBlock)view.FindName("ExchangeMessageText")).Text);
 
                     reply = new(TaskCreationOptions.RunContinuationsAsynchronously);
                     Click(buy);
                     Assert.Equal(2, calls);
-                    Assert.Equal(99, wallet.Balance); // Coins arrive only with the saved service receipt.
+                    Assert.Equal(97, wallet.Balance); // Coins arrive only with the saved service receipt.
                     reply.SetResult(engine.Handle(sent));
                     Pump();
-                    Assert.Equal(109, wallet.Balance);
-                    Assert.Equal(-600, changed!.CoinBudgetSeconds);
-                    Assert.Equal(4800, changed.RemainingSeconds);
-                    Assert.Contains("109", ((Wpf.TextBlock)view.FindName("BalanceText")).Text);
+                    Assert.Equal(98, wallet.Balance);
+                    Assert.Equal(114, changed!.CoinBudgetSeconds);
+                    Assert.Equal(5514, changed.RemainingSeconds);
+                    Assert.Contains("98", ((Wpf.TextBlock)view.FindName("BalanceText")).Text);
                     CaptureView(view, "flight-exchange.png", 1);
 
                     view.SetBudgetStatus(new PipeResponse
                     {
-                        Ok = true, SupportsCoinExchange = true, LogicalDay = LogicalDay.ForLocal(DateTime.Now), RemainingSeconds = 600,
+                        Ok = true, SupportsCoinExchange = true, CoinExchangeVersion = CoinExchangeRates.ProtocolVersion,
+                        LogicalDay = LogicalDay.ForLocal(DateTime.Now), RemainingSeconds = 60,
                     });
                     Assert.False(buy.IsEnabled);
                     Assert.True(sell.IsEnabled);
@@ -249,7 +252,7 @@ public sealed class FlightViewTests
             try
             {
                 string path = Path.Combine(directory, "wallet.json");
-                var wallet = new FlightWallet(path, DateTime.Now);
+                var wallet = WalletFixture.Open(path, DateTime.Now);
                 var engine = new TimerEngine(NullLogger<TimerEngine>.Instance, new StateStore(Path.Combine(directory, "budget.json")));
                 using (var view = new FlightGameView(new CrashGame(wallet, () => 0, () => 4), request =>
                 {
@@ -288,7 +291,7 @@ public sealed class FlightViewTests
             {
                 double clock = 0;
                 DateTime idleNow = DateTime.UtcNow;
-                var wallet = new FlightWallet(Path.Combine(directory, "wallet.json"), DateTime.Now);
+                var wallet = WalletFixture.Open(Path.Combine(directory, "wallet.json"), DateTime.Now);
                 var game = new CrashGame(wallet, () => clock, () => 4);
                 using var view = new FlightGameView(game, idleNow: () => idleNow)
                     { Width = 360, Height = FlightGameView.PanelHeight };

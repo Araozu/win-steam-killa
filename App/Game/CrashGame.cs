@@ -52,7 +52,7 @@ internal sealed class CrashGame
         Update();
         if (IsPaused || Phase != FlightPhase.Boarding || HasBet || expectedRound.HasValue && expectedRound != RoundId)
             return false;
-        Wallet.RefreshDailyGrant(localNow);
+        Wallet.RefreshWeeklyGrant(localNow);
         _ticket = Wallet.PlaceBet(bet, _crashAt, autoCashout);
         return true;
     }

@@ -93,6 +93,7 @@ public class PipeResponse
     public int AdvanceDeductionSeconds { get; set; }
     public int CoinBudgetSeconds { get; set; }
     public bool SupportsCoinExchange { get; set; }
+    public int CoinExchangeVersion { get; set; }
     public CoinExchangeReceipt? ExchangeReceipt { get; set; }
     public int TomorrowBaseSeconds { get; set; }
     // Next press: effectiveness (0.95 first, -0.07 each, 0.001 floor) + gain seconds.

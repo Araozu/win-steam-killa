@@ -150,6 +150,9 @@ public class MainForm : Form
     private readonly System.Windows.Forms.Timer _uiTimer = new() { Interval = 1000 };
     private readonly System.Windows.Forms.Timer _syncTimer = new() { Interval = 15000 };
     private readonly FlightGameView _flightGame;
+    private readonly AppSettings _appSettings;
+    private readonly ElementHost _flightHost;
+    private readonly CheckBox _flightToggle = new() { Text = "Show Flight Club", AutoSize = true };
     private PipeResponse? _last;
     private DateTime _lastPollLocal = DateTime.Now;
     private string? _lastNote;
@@ -158,8 +161,16 @@ public class MainForm : Form
 
     public MainForm() : this(null) { }
 
-    internal MainForm(CrashGame? game)
+    internal MainForm(CrashGame? game, AppSettings? settings = null)
     {
+        _appSettings = settings ?? new AppSettings();
+        _flightToggle.Checked = _appSettings.FlightClubVisible;
+        _flightToggle.Margin = new Padding(0, 8, 0, 0);
+        _flightToggle.CheckedChanged += (_, _) =>
+        {
+            _appSettings.SetFlightClubVisible(_flightToggle.Checked);
+            ApplyFlightClubVisibility();
+        };
         _flightGame = new FlightGameView(game);
         _flightGame.BudgetChanged += response => UpdateFromStatus(response);
         _flightGame.SetAppFocused(false);
@@ -263,7 +274,10 @@ public class MainForm : Form
             Margin = new Padding(0, 14, 0, 0),
             TabStop = true,
         };
+        _flightHost = flightHost;
+        body.Controls.Add(_flightToggle);
         body.Controls.Add(flightHost);
+        ApplyFlightClubVisibility();
 
         Controls.Add(body);
 
@@ -294,6 +308,18 @@ public class MainForm : Form
             _flightGame.Dispose();
         }
         base.Dispose(disposing);
+    }
+
+    internal bool FlightClubVisible => _flightHost.Visible;
+
+    internal void SetFlightClubVisible(bool visible) => _flightToggle.Checked = visible;
+
+    private void ApplyFlightClubVisibility()
+    {
+        // Hiding collapses the ElementHost so the window shrinks; the game
+        // model keeps its saved wallet and keeps ticking slowly while hidden
+        // (rendering detaches via IsVisible), then refreshes on show.
+        _flightHost.Visible = _flightToggle.Checked;
     }
 
     // "0" left, max right, optional mid centered, right below its bar.

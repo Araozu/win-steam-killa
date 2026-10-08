@@ -12,6 +12,7 @@ internal sealed record FlightWalletState
 {
     public int Version { get; init; } = 1;
     public decimal Balance { get; init; }
+    // New grants store the week's Monday; legacy daily dates count for their week.
     public string LastGrantDay { get; init; } = "";
     public decimal LastBet { get; init; } = 10;
     public decimal LastAutoCashout { get; init; }
@@ -27,7 +28,7 @@ internal sealed record FlightWalletState
 // takeoff; an interrupted flight stays paid/lost rather than refunding a restart.
 internal sealed class FlightWallet
 {
-    public const decimal DailyCoins = 100;
+    public const decimal WeeklyCoins = 30;
     public const decimal MaximumBalance = 1_000_000_000_000m;
     private readonly string _path;
     private FlightWalletState _state;
@@ -40,7 +41,7 @@ internal sealed class FlightWallet
     public CoinExchangeRequest? PendingExchange => _state.PendingExchange;
     // Preserve room for a pending purchase or refund, even if a flight pays out.
     private decimal BalanceCap => MaximumBalance - (_state.PendingExchange is { } exchange
-        ? exchange.BuyCoins ? CoinExchangeRates.BoughtCoins : CoinExchangeRates.SoldCoins : 0);
+        ? exchange.CoinCount : 0);
 
     public static string DefaultPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -62,19 +63,20 @@ internal sealed class FlightWallet
 
         if (_state.Pending is { } interrupted)
             Commit(WithResult(_state, interrupted));
-        RefreshDailyGrant(localNow);
+        RefreshWeeklyGrant(localNow);
     }
 
-    public bool RefreshDailyGrant(DateTime localNow)
+    public bool RefreshWeeklyGrant(DateTime localNow)
     {
-        string day = LogicalDay.ForLocal(localNow);
-        // A clock rollback cannot claim the same day again. Missed offline days
-        // don't stack grants; the current day gets one 100-coin allowance.
-        if (string.CompareOrdinal(day, _state.LastGrantDay) <= 0) return false;
+        string week = Limits.WeekStartForLogicalDay(LogicalDay.ForLocal(localNow));
+        string lastWeek = Limits.WeekStartForLogicalDay(_state.LastGrantDay);
+        // Same Monday 03:00 schedule as Dota. A legacy daily grant already counts
+        // for its week; missed weeks and clock rollbacks never stack allowances.
+        if (string.CompareOrdinal(week, lastWeek) <= 0) return false;
         Commit(_state with
         {
-            Balance = Math.Min(BalanceCap, _state.Balance + DailyCoins),
-            LastGrantDay = day,
+            Balance = Math.Min(BalanceCap, _state.Balance + WeeklyCoins),
+            LastGrantDay = week,
         });
         return true;
     }
@@ -112,18 +114,20 @@ internal sealed class FlightWallet
 
     public static decimal PayoutFor(decimal bet, decimal multiplier) => decimal.Ceiling(bet * multiplier * 100) / 100;
 
-    public CoinExchangeRequest BeginExchange(bool buyCoins, DateTime localNow)
+    public CoinExchangeRequest BeginExchange(bool buyCoins, DateTime localNow, int coins = 1)
     {
         if (PendingExchange != null) throw new InvalidOperationException("An exchange is still pending.");
-        if (buyCoins && Balance > MaximumBalance - CoinExchangeRates.BoughtCoins)
+        if (coins < 1 || buyCoins && coins != 1 || !buyCoins && coins > CoinExchangeRates.MaximumSaleCoins)
+            throw new ArgumentOutOfRangeException(nameof(coins), "Buy one coin, or choose a positive whole-coin sale amount.");
+        if (buyCoins && Balance > MaximumBalance - coins)
             throw new InvalidOperationException("The coin wallet is full.");
-        if (!buyCoins && Balance < CoinExchangeRates.SoldCoins)
-            throw new InvalidOperationException("You need at least 1 available coin to sell.");
+        if (!buyCoins && Balance < coins)
+            throw new InvalidOperationException("Choose a sale amount up to your available coin balance.");
         var request = new CoinExchangeRequest(_state.ExchangeWalletId, checked(_state.ExchangeNumber + 1),
-            LogicalDay.ForLocal(localNow), buyCoins);
+            LogicalDay.ForLocal(localNow), buyCoins, coins);
         Commit(_state with
         {
-            Balance = Balance - (buyCoins ? 0 : CoinExchangeRates.SoldCoins),
+            Balance = Balance - (buyCoins ? 0 : coins),
             PendingExchange = request,
         });
         return request;
@@ -133,8 +137,7 @@ internal sealed class FlightWallet
     {
         if (PendingExchange is not { } pending || pending != receipt.Request)
             throw new InvalidOperationException("The exchange receipt does not match the pending trade.");
-        decimal credit = receipt.Applied && pending.BuyCoins ? CoinExchangeRates.BoughtCoins
-            : !receipt.Applied && !pending.BuyCoins ? CoinExchangeRates.SoldCoins : 0;
+        decimal credit = receipt.Applied && pending.BuyCoins || !receipt.Applied && !pending.BuyCoins ? pending.CoinCount : 0;
         Commit(_state with
         {
             Balance = Balance + credit,
@@ -196,9 +199,10 @@ internal sealed class FlightWallet
                 p.AutoCashout != 0 && (p.AutoCashout < 1.01m || p.AutoCashout > CrashGame.MaximumMultiplier)) ||
             state.ExchangeWalletId == Guid.Empty || state.ExchangeNumber < 0 ||
             state.PendingExchange is { } exchange && (exchange.WalletId != state.ExchangeWalletId ||
+                !exchange.HasValidAmount ||
                 state.ExchangeNumber == long.MaxValue || exchange.Number != state.ExchangeNumber + 1 ||
                 !DateTime.TryParseExact(exchange.LogicalDay, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _) ||
-                state.Balance > MaximumBalance - (exchange.BuyCoins ? CoinExchangeRates.BoughtCoins : CoinExchangeRates.SoldCoins)))
+                state.Balance > MaximumBalance - exchange.CoinCount))
             throw new InvalidDataException("The saved coin wallet is invalid. Its file has been preserved.");
     }
 
