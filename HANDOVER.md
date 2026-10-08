@@ -28,17 +28,20 @@ Self-control grade (user keeps Admin): friction, not fortress.
   `C:\ProgramData\SteamTimer\state.json`. Enforce loop: at most one kill pass
   per 60s after deadline / in cooldown (separate 60s throttle for Dota kills).
   Notes also go to the Windows Event Log (`SteamTimer` source).
-- `App/` — WinForms (`net10.0-windows`), display-only. `TrayContext`
+- `App/` — WinForms + embedded WPF (`net10.0-windows`). `TrayContext`
   (ApplicationContext) is the process root: tray icon + tooltip countdown +
   **owns all balloons** via its own 15s `status` poll (daily 15m/up, session
   ending, cooldown start/over, Dota 15m/up); single `MainForm` instance
-  (`ShowMain`); `MainForm` shows daily/session/cooldown/Dota, X hides to tray.
+  (`ShowMain`); `MainForm` shows daily/session/cooldown/Dota and Flight Club,
+  X hides to tray. `App/Game/` owns the minigame's model, wallet, and graphics.
+- `Tests/` — xUnit round/wallet regressions and an STA native UI/rendering test.
 - `Setup/install.ps1` (Admin) — publishes, stops old service+tray and waits
   for exit, copies to `C:\Program Files\SteamTimer`, (re)creates service
   (auto + restart-on-failure), 5-min watchdog task (SYSTEM), HKCU Run entry,
   Start Menu shortcut, launches tray. `uninstall.ps1` reverses it.
 - `README.md` — user-facing usage. Solution file is `SteamTimer.slnx`
   (new .slnx format — build with `dotnet build SteamTimer.slnx`).
+- `FLIGHT_CLUB.md` — complete minigame usage and implementation guide.
 
 ## Policy details (v3 engine)
 - Effective day budget = base(dow) + carryIn − advanceDeduction + borrowed,
@@ -93,6 +96,12 @@ Self-control grade (user keeps Admin): friction, not fortress.
    bug can never stop balloons again.
 
 ## Verified so far
+- Flight Club verification (2026-10-08):
+  `dotnet test SteamTimer.slnx -c Release --verbosity minimal` — 29 passed;
+  `dotnet build SteamTimer.slnx -c Release` — 0 warnings/errors;
+  Windows x64 app publish to `publish/App` succeeded. Native game-state,
+  DPI-scaled, and scrollable-host screenshots inspected. Details and screenshot
+  capture commands are in `FLIGHT_CLUB.md`.
 - `dotnet build SteamTimer.slnx` clean (0 warn/error) — including after the v3
   rework (2h sessions, len-based cooldown, 30m carryover, Dota 9h/week,
   info-only UI).
@@ -123,10 +132,11 @@ Self-control grade (user keeps Admin): friction, not fortress.
   including isolated wallet/round tests and an STA native UI/rendering test.
   Optional `STEAMTIMER_TEST_SCREENSHOTS` saves PNG evidence. No Steam launch or
   real wallet writes occur in tests.
-- HEAD has the v3 automatic model. **User must re-run
-  `Setup/install.ps1` as Admin to deploy it** (deployed binary is still v2:
-  old state.json will be discarded on first v3 boot, Dota week starts fresh,
-  no carryover for the first day).
+- HEAD has the v3 automatic timer model and Flight Club. **Run
+  `Setup/install.ps1` as Admin to deploy repository changes**; building and
+  publishing alone do not update the installed copy. If upgrading a v1/v2
+  timer, its old state is discarded by the v3 version check (fresh Dota week
+  and no carryover for the first day). The coin wallet is a separate file.
 - Shell here is non-elevated (medium integrity): you can build and commit,
   but cannot install/stop the service or write Program Files/ProgramData.
 - Never start a real timer in tests without backing up

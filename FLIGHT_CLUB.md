@@ -1,0 +1,196 @@
+# Flight Club
+
+Flight Club is the plane-themed crash minigame below Steam Timer's time bars
+and buttons. It uses local play coins and runs inside the Windows app, including
+when the timer service is unreachable or Steam is blocked.
+
+## Playing
+
+1. Enter your bet in **BET · COINS**. The minimum is **1 coin**; the maximum is
+   your current balance. Amounts accept up to two decimal places using your
+   Windows region's decimal separator.
+2. Optionally enable **Auto cash-out** and enter a target from **1.01×** to
+   **100×**. The target is locked for that flight once you place the bet.
+3. Click **Take off**. The stake is deducted immediately, followed by a
+   **2.8-second** takeoff countdown.
+4. As the plane climbs, click **Cash out**, or press **Space** while the game
+   has keyboard focus. Your return is the stake multiplied by the multiplier
+   at the time the action is processed, rounded down to two coin decimals.
+5. If the plane flies away first, the stake is lost. If you cash out, the
+   flight continues so you can see how far it would have gone.
+6. After the flight ends, click **Fly again**. The button waits briefly for
+   the departure animation to finish before accepting the next flight.
+
+The **−** button halves the entered bet, and **+** doubles it. Both clamp the
+amount to the available betting range. The **10** and **25** presets also
+clamp to your balance. The wallet remembers the last bet and auto-cash-out
+setting used to start a flight.
+
+The five latest crash multipliers appear above the sky. Hover over one to see
+its stake and, when applicable, cash-out multiplier and total returned coins.
+The wallet retains eight flights in total.
+
+### Payout example
+
+A **10-coin** bet cashed out at **2.00×** returns **20 coins**, including the
+original stake. Starting from 100 coins, the balance becomes 90 when you bet
+and 110 when you collect. Crashing before collection leaves it at 90.
+
+## Daily coins
+
+- A new wallet starts with **100 coins**.
+- Another **100 coins** is granted once per logical day. Like the timer, the
+  logical day runs from **03:00 local** to **03:00 local** the next day.
+- Unspent coins and winnings carry over. Missed days while the app is closed
+  do not accumulate allowances; reopening grants only the current day's
+  allowance if it has not already been claimed.
+- Moving the clock back to an already-claimed date does not grant more coins.
+- A daily grant during a flight adds to the balance without changing the bet.
+- If fewer than 1 coin remains after a flight, the game shows the next grant
+  time and disables takeoff until enough coins are available.
+- Balances are capped at **1,000,000,000,000 coins**.
+
+Hover over the coin balance to see the daily allowance and next reset time.
+
+## Round rules and timing
+
+The state machine is:
+
+```text
+Ready → Countdown → Flying → Crashed
+                      │
+                      └─ cash-out credits coins; flight keeps going
+
+Crashed → Countdown on the next bet
+```
+
+Each flight samples one hidden crash multiplier before takeoff. The random
+source is `RandomNumberGenerator`, using 53 random bits to produce a uniform
+sample `U` in `[0, 1)`:
+
+```text
+crash = clamp(floor(0.97 / (1 - U) × 100) / 100, 1, 100)
+```
+
+The live multiplier starts at 1.00× and grows exponentially:
+
+```text
+multiplier(t) = exp(0.16 × t)
+```
+
+Here `t` is seconds since the countdown ended. The displayed multiplier is
+rounded down to two decimal places. A 2× flight takes approximately 4.33
+seconds after takeoff; 100× takes approximately 28.78 seconds.
+
+Timing uses `Stopwatch`'s monotonic clock rather than counting rendered frames.
+Every cash-out action updates the round first, so a stale display cannot
+collect a bet after its actual crash time. Floating-point rounding cannot
+promote a pre-crash display to the crash multiplier.
+
+**Automatic cash-out** is resolved in event-time order: if its target was
+reached before the crash, it pays even when an update arrives late. A crash
+at exactly the target wins the tie. The exception is the **100× flight cap**:
+any remaining bet is collected automatically when the plane reaches it.
+
+## Hiding, exiting, and saved state
+
+Closing the main window hides it to the tray. A live flight continues, and
+auto-cash-out still works. Reopening shows the current or completed flight.
+Rendering callbacks detach while the graphics surface is hidden.
+
+The wallet is stored per Windows user at:
+
+```text
+%LOCALAPPDATA%\SteamTimer\flight-wallet.json
+```
+
+It is separate from the service's
+`C:\ProgramData\SteamTimer\state.json`.
+
+| Saved field | Purpose |
+| --- | --- |
+| `Version` | Wallet format version, currently 1 |
+| `Balance` | Available coins, represented as a decimal |
+| `LastGrantDay` | Most recent logical date that received its allowance |
+| `LastBet` / `LastAutoCashout` | Settings used to place the last bet |
+| `Pending` | Active flight ID, stake, crash point, auto target, and saved payout |
+| `History` | Up to eight completed or interrupted flights, newest first |
+
+Each mutation writes a temporary file, flushes it to disk, then replaces the
+wallet file. The in-memory wallet changes only after the replacement succeeds.
+The stake is saved **before** the countdown; a payout is saved **before** it is
+shown as collected.
+
+If the application exits during a flight, the next launch records that flight
+in history and returns to the ready screen. A previously saved payout remains
+credited. An unpaid stake stays lost; restarting does not refund it or resume
+the flight. Recovery is recorded once, so reopening again cannot pay twice.
+
+Unreadable or invalid wallet data is preserved. The game displays a wallet
+error and disables betting instead of silently replacing the saved balance.
+
+## Graphics and application architecture
+
+The existing app is WinForms. A WPF `UserControl` is embedded through
+`System.Windows.Forms.Integration.ElementHost`, below the timer controls.
+WPF uses Windows' Direct3D-backed compositor with automatic software fallback
+when hardware acceleration is unavailable. No OpenGL/Vulkan package, external
+native graphics DLL, image asset download, or browser is required.
+
+The graphics are vector paths and gradients: a red propeller plane, animated
+stars and clouds, a moving runway, a curved glowing trail, departure particles,
+and cash-out celebration particles. `CompositionTarget.Rendering` schedules
+visual updates, limited to at most 60 per second. The independent game timer
+updates active rounds every 50 ms and idle state every second; drawing does
+not settle bets or mutate the wallet.
+
+The host window supports DPI scaling and vertical scrolling on shorter
+desktops. Relaunching the app signals the existing instance to open its window
+through a session-local mutex and activation event.
+
+| File | Responsibility |
+| --- | --- |
+| [CrashGame.cs](App/Game/CrashGame.cs) | Round state, randomness, monotonic timing, cash-out ordering |
+| [FlightWallet.cs](App/Game/FlightWallet.cs) | Daily grants, decimal accounting, atomic persistence, recovery |
+| [FlightGameView.xaml](App/Game/FlightGameView.xaml) | Game layout, controls, and visual styles |
+| [FlightGameView.xaml.cs](App/Game/FlightGameView.xaml.cs) | Input validation, controls, HUD, history, and model timer |
+| [FlightScene.cs](App/Game/FlightScene.cs) | Animated vector graphics and composition lifecycle |
+| [MainForm.cs](App/MainForm.cs) | WinForms host, scrolling, DPI scaling, and disposal |
+| [Program.cs](App/Program.cs) | Single-instance startup and window activation |
+| [CrashGameTests.cs](Tests/CrashGameTests.cs) | Wallet and round regression tests |
+| [FlightViewTests.cs](Tests/FlightViewTests.cs) | STA native rendering and interaction test |
+
+## Building, checking, and installing
+
+Use Windows with the **.NET 10 SDK**. The installed app uses the **.NET 10
+Windows Desktop Runtime**, which includes WinForms and WPF.
+
+From the repository root:
+
+```powershell
+dotnet build SteamTimer.slnx -c Release
+dotnet test SteamTimer.slnx -c Release --verbosity minimal
+dotnet publish App/App.csproj -c Release -r win-x64 --self-contained false -o publish/App
+```
+
+The test suite uses temporary wallets and deterministic clocks. The native UI
+test runs on an STA thread and checks input validation, takeoff, automatic and
+keyboard cash-out, hidden-flight completion, DPI-scaled rendering, and the
+scrollable WinForms host. Tests do not launch Steam or write to the real coin
+wallet.
+
+To save screenshots of the native game states and host window:
+
+```powershell
+$env:STEAMTIMER_TEST_SCREENSHOTS = "$env:TEMP\SteamTimer-flight-evidence"
+dotnet test SteamTimer.slnx -c Release --verbosity minimal
+```
+
+Verification on **2026-10-08**: **29 tests passed**, Release solution build
+completed with **0 warnings and 0 errors**, and the Windows x64 app published
+successfully. Screenshots of flight states, scaled graphics, and the actual
+host window were also inspected.
+
+To update the installed copy, run [Setup/install.ps1](Setup/install.ps1) as
+Administrator and reopen Steam Timer. Building or publishing alone updates
+repository output files, not the installed files under Program Files.

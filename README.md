@@ -70,6 +70,9 @@ or asset downloads are needed.
 The window scrolls on smaller desktops, and the game works independently of
 the Windows service. Coin bets never change your Steam or Dota time budgets.
 
+See the [Flight Club guide](FLIGHT_CLUB.md) for controls, timing rules,
+wallet recovery, graphics architecture, and build/test instructions.
+
 ## Dev
 
 ```powershell
