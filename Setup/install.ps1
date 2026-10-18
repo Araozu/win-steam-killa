@@ -59,4 +59,4 @@ $Lnk.Save()
 Write-Host "Starting tray app..."
 Start-Process $AppExe
 
-Write-Host "Done. Open 'Steam Timer' from Start. Auto-tracked: 2h sessions + len-based cooldowns, M-F 1h30 / Sat 2h30 / Sun 4h +30m carry, Dota 9h/week."
+Write-Host "Done. Open 'Steam Timer' from Start. Auto-tracked: 2h sessions + len-based cooldowns, M-F 1h30 / Sat 2h30 / Sun 4h +30m carry, Dota 8h/week (forbidden Mon/Wed/Fri)."

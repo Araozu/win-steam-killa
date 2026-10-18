@@ -7,14 +7,15 @@ namespace App;
 //   Recheck — ask the service what it sees RIGHT NOW (client/games/orphans).
 //   Force close — kill Steam + games now and stop the timer (normal cooldown
 //   for the time played still applies).
-//   Borrow — take 10m off tomorrow for 95% today, -7pp each further press
-//   (0.1% floor), one click, no confirm (repeatable, no Sundays). The button
-//   heats toward red as effectiveness drops.
+//   Borrow — take 10m off tomorrow for 95% today, then -7pp, -8pp,
+//   -9pp, ... per further press (0.1% floor), one click, no confirm (repeatable,
+//   no Sundays). The button heats toward red as effectiveness drops.
 //
 // Top of the window is three time bars:
 //   Session (green, fills with played time toward the 2h max
 //   — turns red and drains to 0 during cooldown) /
-//   Today (green, remaining drains) / Dota 2 week (red, remaining drains).
+//   Today (green, remaining drains) / Dota 2 week (red, remaining drains,
+//   "forbidden" on Mon / Wed / Fri — Dota banned, Steam + other games continue).
 // Remaining time lives INSIDE each bar; 0 / max scale sits right below it.
 public class MainForm : Form
 {
@@ -140,6 +141,8 @@ public class MainForm : Form
     private readonly Button _killBtn = new() { Text = "Force close Steam + games", AutoSize = true };
     private readonly Button _borrowBtn = new() { Text = "+10m from tomorrow (95% effective)", AutoSize = true, UseVisualStyleBackColor = false };
     private readonly Label _tomorrowLabel = new() { AutoSize = true, ForeColor = SystemColors.ControlText };
+    private readonly Button _dotaBorrowBtn = new() { Text = "+10m from next week (95% effective)", AutoSize = true, UseVisualStyleBackColor = false };
+    private readonly Label _nextWeekLabel = new() { AutoSize = true, ForeColor = SystemColors.ControlText };
     private readonly Label _detectorLabel = new() { AutoSize = true, Text = "Detector: —" };
     private readonly Button _detailsToggle = new() { Text = "Details ▸", AutoSize = true };
     private readonly FlowLayoutPanel _detailsPanel = new() { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, MaximumSize = new Size(BarWidth + 20, 0), Visible = false };
@@ -224,6 +227,20 @@ public class MainForm : Form
         _tomorrowLabel.Text = "Tomorrow: —";
         row2.Controls.Add(_tomorrowLabel);
         body.Controls.Add(row2);
+
+        var row3 = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            AutoSize = true,
+        };
+        _dotaBorrowBtn.Margin = new Padding(0, 8, 0, 0);
+        _dotaBorrowBtn.Click += async (_, _) => await BorrowDotaAsync();
+        row3.Controls.Add(_dotaBorrowBtn);
+        _nextWeekLabel.Margin = new Padding(8, 14, 0, 0);
+        _nextWeekLabel.Text = "Next week: —";
+        row3.Controls.Add(_nextWeekLabel);
+        body.Controls.Add(row3);
 
         // Collapsed secondary info (was: "?" popups + gray detail lines).
         _detailsToggle.Margin = new Padding(0, 8, 0, 0);
@@ -423,6 +440,41 @@ public class MainForm : Form
         finally { _busy = false; _borrowBtn.Enabled = true; }
     }
 
+    // Dota borrow: one click, no confirm, no success popup — the bar + button update.
+    // Errors (next week empty / service down) still show a dialog.
+    private async Task BorrowDotaAsync()
+    {
+        if (_busy) return;
+        _busy = true;
+        _dotaBorrowBtn.Enabled = false;
+        try
+        {
+            var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "borrowdota" }, timeoutMs: 15000);
+            if (resp == null)
+            {
+                _serviceOk = false;
+                _lastNote = "Dota borrow failed — service unreachable. Is SteamTimer running?";
+                RefreshCountdown();
+                MessageBox.Show(_lastNote, "Steam Timer", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            if (!resp.Ok)
+            {
+                _serviceOk = true;
+                _lastNote = resp.Error;
+                UpdateFromStatus(resp, keepNote: false);
+                _lastNote = resp.Error;
+                RefreshCountdown();
+                MessageBox.Show(resp.Error, "Steam Timer — Dota borrow", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            _serviceOk = true;
+            _lastNote = null; // no success popup by design; detail line stays clean
+            UpdateFromStatus(resp, keepNote: false);
+        }
+        finally { _busy = false; _dotaBorrowBtn.Enabled = true; }
+    }
+
     private static string DescribeSeen(PipeResponse r)
     {
         var bits = new List<string>();
@@ -504,6 +556,26 @@ public class MainForm : Form
         _tomorrowLabel.Text = $"Tomorrow: {Hm(TomorrowRemainingSeconds(r))}";
     }
 
+    // Dota button: same decay, but heating runs 95% -> 50% floor.
+    private void RefreshDotaBorrowButton(PipeResponse r)
+    {
+        double eff = r.NextDotaBorrowEffectiveness > 0
+            ? r.NextDotaBorrowEffectiveness
+            : Limits.NextDotaBorrowEffectiveness(r.DotaBorrowCount);
+        _dotaBorrowBtn.Text = Limits.DotaBorrowButtonText(r.DotaBorrowCount);
+        double t = 1 - (eff - Limits.DotaBorrowMinEffectiveness)
+            / (Limits.BorrowFirstEffectiveness - Limits.DotaBorrowMinEffectiveness);
+        t = Math.Clamp(t, 0, 1);
+        var start = SystemColors.Control;
+        var end = Color.FromArgb(0xD3, 0x2F, 0x2F);
+        _dotaBorrowBtn.BackColor = Color.FromArgb(
+            (int)(start.R + (end.R - start.R) * t),
+            (int)(start.G + (end.G - start.G) * t),
+            (int)(start.B + (end.B - start.B) * t));
+        _dotaBorrowBtn.ForeColor = t > 0.5 ? Color.White : SystemColors.ControlText;
+        _nextWeekLabel.Text = $"Next week: {Hm(NextWeekDotaRemainingSeconds(r))}";
+    }
+
     private static double TomorrowRemainingSeconds(PipeResponse r)
     {
         double tomorrowBase = r.TomorrowBaseSeconds > 0
@@ -511,6 +583,13 @@ public class MainForm : Form
             : Limits.DailyBaseFor(DateTime.Now.AddDays(1).DayOfWeek).TotalSeconds;
         double debt = r.BorrowCount * Limits.BorrowCost.TotalSeconds;
         return Math.Max(0, tomorrowBase - debt);
+    }
+
+    private static double NextWeekDotaRemainingSeconds(PipeResponse r)
+    {
+        double nextBase = Limits.DotaWeeklyBudget.TotalSeconds;
+        double debt = r.DotaBorrowCount * Limits.BorrowCost.TotalSeconds;
+        return Math.Max(0, nextBase - debt);
     }
 
     private void RefreshCountdown()
@@ -541,10 +620,12 @@ public class MainForm : Form
             _detectorDetailLabel.Text = "";
             _detectorLabel.Text = "Detector: —";
             _tomorrowLabel.Text = "Tomorrow: —";
+            _nextWeekLabel.Text = "Next week: —";
             return;
         }
         var r = _last;
         RefreshBorrowButton(r);
+        RefreshDotaBorrowButton(r);
         // Estimate live values between 15s polls while things run.
         double elapsed = (DateTime.Now - _lastPollLocal).TotalSeconds;
         double remaining = r.RemainingSeconds;
@@ -611,7 +692,7 @@ public class MainForm : Form
         }
 
         string dailyText = (r.Enforcing || remaining <= 0) ? "used up" : $"{Hm(remaining)} left";
-        string dotaText = r.DotaEnforcing ? "used up" : $"{Hm(dotaRem)} left";
+        string dotaText = r.DotaForbidden ? "forbidden" : r.DotaEnforcing ? "used up" : $"{Hm(dotaRem)} left";
 
         _sessionTitle.Text = r.Running ? "Session - playing" : "Session";
         _sessionBar.FillColor = sessColor;
@@ -631,9 +712,9 @@ public class MainForm : Form
         _dailyBar.Invalidate();
         SetMaxLabel(_dailyMax, Hm(dailyMax));
 
-        _dotaTitle.Text = r.DotaRunning ? "Dota 2 - running" : "Dota 2";
+        _dotaTitle.Text = r.DotaForbidden ? "Dota 2 — forbidden Mon / Wed / Fri" : r.DotaRunning ? "Dota 2 - running" : "Dota 2";
         _dotaBar.MaximumSeconds = dotaMax;
-        _dotaBar.RemainingSeconds = dotaRem;
+        _dotaBar.RemainingSeconds = r.DotaForbidden ? 0 : dotaRem;
         _dotaBar.DisplayText = dotaText;
         _dotaBar.Invalidate();
         SetMaxLabel(_dotaMax, Hm(dotaMax));
@@ -663,7 +744,7 @@ public class MainForm : Form
             _status.Visible = !string.IsNullOrEmpty(sessionLine);
             var left = TimeSpan.FromSeconds(remaining);
             string tip = (r.Running ? $"Steam: {Hm(remaining)} left today" : $"Paused: {Hm(remaining)} left today")
-                + (r.DotaEnforcing ? " • Dota done" : "");
+                + (r.DotaForbidden ? " • Dota forbidden M/W/F" : r.DotaEnforcing ? " • Dota done" : "");
             TrayContext.Instance?.SetState(tip, left);
         }
 
@@ -672,7 +753,12 @@ public class MainForm : Form
         _todayDetailLabel.Text = $"Budget {Hm(dailyMax)} total\nBase {Hm(r.BaseBudgetSeconds)} + carry {Hm(r.CarryInSeconds)}" +
             (r.BorrowedSeconds > 0 ? $" + borrow {Hm(r.BorrowedSeconds)}" : "") +
             (r.AdvanceDeductionSeconds > 0 ? $" − advance {Hm(r.AdvanceDeductionSeconds)}" : "") +
-            $"\nUsed {Hm(r.UsedSeconds)}, left {Hm(remaining)}";
+            $"\nUsed {Hm(r.UsedSeconds)}, left {Hm(remaining)}" +
+            $"\n\nDota {Hm(dotaMax)} total\nBase {Hm(r.DotaBaseBudgetSeconds > 0 ? r.DotaBaseBudgetSeconds : Limits.DotaWeeklyBudget.TotalSeconds)}" +
+            (r.DotaBorrowedSeconds > 0 ? $" + borrow {Hm(r.DotaBorrowedSeconds)}" : "") +
+            (r.DotaAdvanceDeductionSeconds > 0 ? $" − advance {Hm(r.DotaAdvanceDeductionSeconds)}" : "") +
+            $"\nUsed {Hm(r.DotaUsedSeconds)}, left {Hm(dotaRem)}" +
+            (r.DotaForbidden ? "\nNo Dota on Mon / Wed / Fri." : "");
 
         _detectorLabel.Text = r.SteamRunning ? "Detector: Steam detected" : "Detector: nothing detected";
         _detectorDetailLabel.Text = "Sees now: " + DescribeSeen(r) + ".\n" +

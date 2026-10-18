@@ -9,7 +9,7 @@ After the budget is used, kills Steam + games and keeps enforcing until 03:00.
 - **Daily budget:** Mon–Fri **1h30m**, Sat **2h30m**, Sun **4h**.
   Up to **30m** of unused budget carries over to the next day.
 - **Borrow from tomorrow:** button takes **10m** off tomorrow for up to
-  **+9m30s today** (95% on the 1st press, −7pp each further press, 0.1%
+  **+9m30s today** (95% on the 1st press, −7pp, −8pp, −9pp... each further press, 0.1%
   floor). One click, no confirm. Repeatable, capped so tomorrow never drops
   below zero. **Unavailable on Sundays.** The button heats toward red as
   effectiveness drops. Pressing mid-session extends the current session by the
@@ -20,9 +20,14 @@ After the budget is used, kills Steam + games and keeps enforcing until 03:00.
   (or the 2h max / budget hits).
 - **Cooldown:** after *every* session, Steam is blocked for that session's
   length **rounded up to 5 minutes** (e.g. 1h12m played → 1h15m cooldown).
-- **Dota 2:** **9h weekly** budget, resets **Monday 03:00**. Dota time burns
+- **Dota 2:** **8h weekly** budget, resets **Monday 03:00**. Dota time burns
   both budgets, but a Dota-only lockout kills just Dota — Steam and other
-  games continue on the daily budget.
+  games continue on the daily budget. **Forbidden on Mon / Wed / Fri** — Dota is
+  closed/blocked all those days (03:00–03:00), burns no weekly budget.
+- **Borrow Dota from next week:** button takes **10m** off next week's Dota
+  for up to **+9m30s this week** (95% on the 1st press, −7pp, −8pp, −9pp...
+  each further press, 50% floor). One click, no confirm. Repeatable, capped
+  so next week never drops below zero.
 
 ## Use (you need nothing about Windows)
 
@@ -41,7 +46,7 @@ After the budget is used, kills Steam + games and keeps enforcing until 03:00.
 - `App/` — WinForms info window + quiet tray (`NotifyIcon` tooltip = countdown,
   balloons only for warnings/kill/cooldown/Dota).
 - `Shared/` — `Limits` (2h session max, len-based cooldown, 30m carryover,
-  9h Dota week), `LogicalDay` (03:00 reset), pipe DTOs.
+  8h Dota week), `LogicalDay` (03:00 reset), pipe DTOs.
 
 ## Dev
 

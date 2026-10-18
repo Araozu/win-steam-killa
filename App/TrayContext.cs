@@ -12,6 +12,7 @@ public class TrayContext : ApplicationContext
     private readonly System.Windows.Forms.Timer _poll = new() { Interval = 15000 };
     private MainForm? _form;
     private ToolStripMenuItem? _borrowMenuItem;
+    private ToolStripMenuItem? _dotaBorrowMenuItem;
     private bool _polling;
     private string? _seenDay;
     private bool _warned;
@@ -24,6 +25,8 @@ public class TrayContext : ApplicationContext
     private string? _seenDotaWeek;
     private bool _dotaWarned;
     private bool _dotaTold;
+    private string? _seenForbiddenDay;
+    private bool _forbiddenTold;
 
     public TrayContext()
     {
@@ -38,6 +41,9 @@ public class TrayContext : ApplicationContext
         _borrowMenuItem = new ToolStripMenuItem(Limits.BorrowButtonText(0));
         _borrowMenuItem.Click += async (_, _) => await BorrowAsync();
         menu.Items.Add(_borrowMenuItem);
+        _dotaBorrowMenuItem = new ToolStripMenuItem(Limits.DotaBorrowButtonText(0));
+        _dotaBorrowMenuItem.Click += async (_, _) => await BorrowDotaAsync();
+        menu.Items.Add(_dotaBorrowMenuItem);
         menu.Items.Add("Exit tray (timer keeps running, popups stop)", null, (_, _) =>
         {
             var r = MessageBox.Show(
@@ -89,6 +95,7 @@ public class TrayContext : ApplicationContext
             // loop that owns all balloon notifications.
             try { _form?.UpdateFromStatus(resp); } catch { }
             try { if (_borrowMenuItem != null) _borrowMenuItem.Text = Limits.BorrowButtonText(resp.BorrowCount); } catch { }
+            try { if (_dotaBorrowMenuItem != null) _dotaBorrowMenuItem.Text = Limits.DotaBorrowButtonText(resp.DotaBorrowCount); } catch { }
             if (resp.LogicalDay != _seenDay)
             {
                 _seenDay = resp.LogicalDay;
@@ -104,6 +111,11 @@ public class TrayContext : ApplicationContext
                 _seenDotaWeek = resp.DotaWeekStart;
                 _dotaWarned = false;
                 _dotaTold = false;
+            }
+            if (resp.LogicalDay != _seenForbiddenDay)
+            {
+                _seenForbiddenDay = resp.LogicalDay;
+                _forbiddenTold = false;
             }
             if (resp.Enforcing || resp.RemainingSeconds <= 0)
             {
@@ -138,10 +150,10 @@ public class TrayContext : ApplicationContext
             double remSafe = double.IsNaN(resp.RemainingSeconds) || double.IsInfinity(resp.RemainingSeconds) ? 0 : Math.Max(0, resp.RemainingSeconds);
             var left = TimeSpan.FromSeconds(Math.Min(remSafe, TimeSpan.MaxValue.TotalSeconds));
             string tip = (resp.Running ? $"Steam: {Hm(resp.RemainingSeconds)} left" : $"Paused: {Hm(resp.RemainingSeconds)} left")
-                + (resp.DotaEnforcing ? " • Dota done" : "");
+                + (resp.DotaForbidden ? " • Dota forbidden M/W/F" : resp.DotaEnforcing ? " • Dota done" : "");
             bool sessionEnding = resp.SessionRemainingSeconds < resp.RemainingSeconds &&
                 resp.SessionRemainingSeconds <= Limits.WarnBefore.TotalSeconds && resp.SessionRemainingSeconds > 0;
-            bool dotaLow = resp.DotaRunning && !resp.DotaEnforcing &&
+            bool dotaLow = resp.DotaRunning && !resp.DotaForbidden && !resp.DotaEnforcing &&
                 resp.DotaRemainingSeconds <= Limits.WarnBefore.TotalSeconds && resp.DotaRemainingSeconds > 0;
             // Icon: warning under 30m daily. A session/Dota ending soon also
             // deserves the warning icon even with plenty of daily budget left
@@ -167,8 +179,16 @@ public class TrayContext : ApplicationContext
                 }
             }
             else { _seenSessionKey = null; _sessionWarned = false; }
-            // Dota weekly budget: kills only Dota, other games continue.
-            if (resp.DotaEnforcing)
+            // Dota: forbidden Mon / Wed / Fri takes precedence over the weekly budget.
+            if (resp.DotaForbidden)
+            {
+                if (!_forbiddenTold)
+                {
+                    _forbiddenTold = true;
+                    Balloon("Dota 2 forbidden on Mon / Wed / Fri", "No Dota today — back tomorrow. Steam + other games continue.");
+                }
+            }
+            else if (resp.DotaEnforcing)
             {
                 if (!_dotaTold)
                 {
@@ -250,6 +270,22 @@ public class TrayContext : ApplicationContext
             if (!resp.Ok) { Balloon("Borrow unavailable", resp.Error); try { _form?.UpdateFromStatus(resp); } catch { } return; }
             try { _form?.UpdateFromStatus(resp); } catch { }
             try { if (_borrowMenuItem != null) _borrowMenuItem.Text = Limits.BorrowButtonText(resp.BorrowCount); } catch { }
+        }
+        finally { _acting = false; }
+    }
+
+    // Dota borrow: one click, no confirm, no success balloon — errors still balloon.
+    private async Task BorrowDotaAsync()
+    {
+        if (_acting) return;
+        _acting = true;
+        try
+        {
+            var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "borrowdota" }, timeoutMs: 15000);
+            if (resp == null) { Balloon("Dota borrow failed", "Service unreachable. Is SteamTimer running?"); return; }
+            if (!resp.Ok) { Balloon("Dota borrow unavailable", resp.Error); try { _form?.UpdateFromStatus(resp); } catch { } return; }
+            try { _form?.UpdateFromStatus(resp); } catch { }
+            try { if (_dotaBorrowMenuItem != null) _dotaBorrowMenuItem.Text = Limits.DotaBorrowButtonText(resp.DotaBorrowCount); } catch { }
         }
         finally { _acting = false; }
     }

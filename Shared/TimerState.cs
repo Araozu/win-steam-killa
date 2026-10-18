@@ -2,7 +2,7 @@ namespace Shared;
 
 public class TimerState
 {
-    public int Version { get; set; } = 3;
+    public int Version { get; set; } = 5;
     // Logical day "yyyy-MM-dd" (03:00 local -> 03:00 local). Base budget derives
     // from its weekday; effective budget includes carry-in and borrowing.
     public string LogicalDay { get; set; } = "";
@@ -41,6 +41,15 @@ public class TimerState
     public double DotaUsedSeconds { get; set; }
     public bool DotaWarned { get; set; }
     public bool DotaNotified { get; set; }
+    // Dota borrow/advance: extra granted this week (sum of per-press gains,
+    // 95% first, -7pp/-8pp/... , 50% floor) and the deduction applied this
+    // week for last week's borrows (last week's count * BorrowCost = 10m each).
+    public int DotaBorrowedSeconds { get; set; }
+    public int DotaBorrowCount { get; set; }
+    public int DotaAdvanceDeductionSeconds { get; set; }
+    // Once-per-day flag: forbidden-day "no Dota" notification already sent.
+    // Resets on day rollover (fresh state each logical day).
+    public bool DotaForbiddenNotified { get; set; }
 
     public TimerState Copy() => (TimerState)MemberwiseClone();
 }
@@ -61,7 +70,7 @@ public class GameRecord
 // Pipe messages (one JSON object per connection, newline terminated).
 public class PipeRequest
 {
-    public string Cmd { get; set; } = ""; // "status" | "recheck" | "kill" | "borrow"
+    public string Cmd { get; set; } = ""; // "status" | "recheck" | "kill" | "borrow" | "borrowdota"
     public int Seconds { get; set; }
 }
 
@@ -86,7 +95,7 @@ public class PipeResponse
     public int BorrowCount { get; set; }
     public int AdvanceDeductionSeconds { get; set; }
     public int TomorrowBaseSeconds { get; set; }
-    // Next press: effectiveness (0.95 first, -0.07 each, 0.001 floor) + gain seconds.
+    // Next press: effectiveness (0.95 first, then -0.07, -0.08, ..., 0.001 floor) + gain seconds.
     public double NextBorrowEffectiveness { get; set; }
     public int NextBorrowGainSeconds { get; set; }
     public double UsedSeconds { get; set; }
@@ -110,6 +119,16 @@ public class PipeResponse
     public bool DotaRunning { get; set; }
     public bool DotaEnforcing { get; set; }
     public DateTime DotaResetsLocal { get; set; }
+    // --- Dota borrow/advance (effective = base 8h + borrowed - deduction) ---
+    public int DotaBaseBudgetSeconds { get; set; }
+    public int DotaBorrowedSeconds { get; set; }
+    public int DotaBorrowCount { get; set; }
+    public int DotaAdvanceDeductionSeconds { get; set; }
+    // Next press: effectiveness (0.95 first, then -0.07, -0.08, ..., 0.5 floor) + gain seconds.
+    public double NextDotaBorrowEffectiveness { get; set; }
+    public int NextDotaBorrowGainSeconds { get; set; }
+    // True on forbidden days (logical day: Mon / Wed / Fri): Dota 2 forbidden, only Dota killed.
+    public bool DotaForbidden { get; set; }
     // --- live detector breakdown (for the Recheck button / clarity) ---
     // Bare process names seen alive right now, e.g. ["steam", "steamwebhelper"].
     public List<string> LiveClients { get; set; } = new();
