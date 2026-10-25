@@ -25,6 +25,7 @@ public class TimerEngine
     private TimerState? _state;
     private DateTime _lastEnforceKill = DateTime.MinValue;
     private DateTime _lastDotaKill = DateTime.MinValue;
+    private string _lastWindowNoteKey = "";
     private readonly ILogger<TimerEngine> _log;
 
     public event Action<string, string>? Notify; // title, body (UI polls status; service also logs)
@@ -240,7 +241,8 @@ public class TimerEngine
         if (r.LiveGames.Count > 0) bits.Add("games: " + string.Join(", ", r.LiveGames));
         if (r.MatchedOrphans.Count > 0) bits.Add("orphans: " + string.Join(", ", r.MatchedOrphans));
         string seen = bits.Count > 0 ? string.Join("; ", bits) : "nothing running";
-        string timer = r.Running ? "session OPEN (accruing)" : r.InCooldown ? "in cooldown (blocked, accrues nothing)" : "no session (stopped)";
+        string timer = r.OutsidePlayHours ? $"outside play hours (blocked until {r.NextPlayAllowedLocal:HH:mm}, accrues nothing)"
+            : r.Running ? "session OPEN (accruing)" : r.InCooldown ? "in cooldown (blocked, accrues nothing)" : "no session (stopped)";
         string dota = r.DotaRunning ? ", Dota 2 running" : "";
         if (r.DotaForbidden) dota += " (Dota forbidden Mon / Wed / Fri)";
         return $"Detector sees {seen}. Timer: {timer}{dota}.";
@@ -412,6 +414,10 @@ public class TimerEngine
         double dotaBase = Limits.DotaWeeklyBudget.TotalSeconds;
         double dotaRem = Math.Max(0, dotaBudget - st.DotaUsedSeconds);
         bool dotaForbidden = Limits.IsDotaForbiddenLogicalDay(st.LogicalDay);
+        bool playAllowed = Limits.IsPlayAllowed(nowUtc.ToLocalTime());
+        r.OutsidePlayHours = !playAllowed;
+        r.NextPlayAllowedLocal = Limits.NextPlayAllowedLocal(nowUtc.ToLocalTime());
+        r.WindowEndsLocal = Limits.CurrentWindowEndLocal(nowUtc.ToLocalTime());
         r.Ok = true;
         r.HasTimer = st.UsedSeconds > 0 || st.Running || remaining <= 0 || inCooldown || st.DotaUsedSeconds > 0;
         r.LogicalDay = st.LogicalDay;
@@ -518,7 +524,11 @@ public class TimerEngine
             double effectiveDota() => EffectiveDotaOf(st);
             double dotaLeft() => Math.Max(0, effectiveDota() - st.DotaUsedSeconds);
 
+            bool playAllowed = Limits.IsPlayAllowed(nowLocal);
+            DateTime nextAllowedLocal = Limits.NextPlayAllowedLocal(nowLocal);
+
             // Cooldown expiry transition: announce once, then allow play.
+            // While outside play hours the expiry is silent (still blocked).
             if (st.CooldownUntilUtc != default && nowUtc >= st.CooldownUntilUtc)
             {
                 st.CooldownUntilUtc = default;
@@ -526,13 +536,102 @@ public class TimerEngine
                 st.SessionWarned = false;
                 _store.Save(st);
                 _log.LogInformation("Cooldown over, new session allowed.");
-                notes.Add(("Cooldown over",
-                    $"You can play again. {Limits.FormatHm(TimeSpan.FromSeconds(dailyLeft()))} left today."));
-                foreach (var n in notes) Notify?.Invoke(n.Item1, n.Item2);
-                return notes;
+                if (playAllowed)
+                {
+                    notes.Add(("Cooldown over",
+                        $"You can play again. {Limits.FormatHm(TimeSpan.FromSeconds(dailyLeft()))} left today."));
+                    foreach (var n in notes) Notify?.Invoke(n.Item1, n.Item2);
+                    return notes;
+                }
+                // Outside play hours: clear silently, fall through to the window block.
             }
 
             bool inCooldown = st.CooldownUntilUtc > nowUtc;
+
+            // Weekday play windows (Mon–Fri 05:45–06:15 + 20:30–22:00, weekends free):
+            // outside the windows Steam is blocked, nothing accrues. Kills are
+            // throttled to one pass per 60s; notifications once per block period.
+            if (!playAllowed)
+            {
+                string blockKey = "w:" + nextAllowedLocal.ToString("yyyy-MM-dd HH:mm");
+                bool firstInBlock = blockKey != _lastWindowNoteKey;
+                if (playing || dotaRunning)
+                {
+                    if ((nowUtc - _lastEnforceKill) >= TimeSpan.FromMinutes(1))
+                    {
+                        int n = Killer.KillPlaySet(st.SeenGames, st.GameHistory, log);
+                        _lastEnforceKill = nowUtc;
+                        if (dotaRunning && (nowUtc - _lastDotaKill) >= TimeSpan.FromMinutes(1))
+                        {
+                            try { Killer.KillDota(log); } catch { }
+                            _lastDotaKill = nowUtc;
+                        }
+                        _log.LogInformation("Outside play hours, blocked launch killed {N}.", n);
+                        if (st.Running)
+                        {
+                            bool hadPlay = st.SessionUsedSeconds > 0;
+                            st.Running = false;
+                            if (hadPlay)
+                            {
+                                var len = TimeSpan.FromSeconds(st.SessionUsedSeconds);
+                                var cd = Limits.CooldownForSession(len);
+                                st.CooldownUntilUtc = nowUtc + cd;
+                                st.LastSessionSeconds = st.SessionUsedSeconds;
+                                st.SessionUsedSeconds = 0;
+                                st.SessionWarned = false;
+                            }
+                            else
+                            {
+                                st.SessionUsedSeconds = 0;
+                                st.SessionWarned = false;
+                            }
+                        }
+                        _store.Save(st);
+                        if (firstInBlock)
+                        {
+                            _lastWindowNoteKey = blockKey;
+                            notes.Add(("Outside play hours",
+                                n > 0 ? $"Steam blocked ({Limits.PlayHoursSummary}). Back at {nextAllowedLocal:HH:mm}. Closed {n} process(es)." : $"Steam blocked ({Limits.PlayHoursSummary}). Back at {nextAllowedLocal:HH:mm}."));
+                        }
+                    }
+                    else _store.Save(st);
+                }
+                else
+                {
+                    if (st.Running)
+                    {
+                        bool hadPlay = st.SessionUsedSeconds > 0;
+                        st.Running = false;
+                        if (hadPlay)
+                        {
+                            var len = TimeSpan.FromSeconds(st.SessionUsedSeconds);
+                            var cd = Limits.CooldownForSession(len);
+                            st.CooldownUntilUtc = nowUtc + cd;
+                            st.LastSessionSeconds = st.SessionUsedSeconds;
+                            st.SessionUsedSeconds = 0;
+                            st.SessionWarned = false;
+                            _store.Save(st);
+                            _log.LogInformation("Session ended by play-window close ({Len}s).", (int)len.TotalSeconds);
+                            if (firstInBlock)
+                            {
+                                _lastWindowNoteKey = blockKey;
+                                notes.Add(("Play window ended",
+                                    $"Steam blocked until {nextAllowedLocal:HH:mm} ({Limits.PlayHoursSummary})."));
+                            }
+                        }
+                        else
+                        {
+                            st.SessionUsedSeconds = 0;
+                            st.SessionWarned = false;
+                            _store.Save(st);
+                        }
+                    }
+                    else _store.Save(st);
+                }
+                foreach (var n in notes) Notify?.Invoke(n.Item1, n.Item2);
+                return notes;
+            }
+            _ = nextAllowedLocal;
 
             // Mon / Wed / Fri: Dota 2 forbidden. Kill only Dota (60s throttle),
             // accrue nothing to the weekly budget, notify once per day.

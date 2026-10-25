@@ -24,6 +24,10 @@ After the budget is used, kills Steam + games and keeps enforcing until 03:00.
   both budgets, but a Dota-only lockout kills just Dota — Steam and other
   games continue on the daily budget. **Forbidden on Mon / Wed / Fri** — Dota is
   closed/blocked all those days (03:00–03:00), burns no weekly budget.
+- **Play hours:** Mon–Fri Steam may only run **05:45–06:15** and **20:30–22:00**
+  (local wall-clock). Outside those windows Steam + games are closed/blocked
+  and nothing accrues. **Sat/Sun have no time restriction** (budget/cooldown/
+  Dota rules still apply).
 - **Borrow Dota from next week:** button takes **10m** off next week's Dota
   for up to **+9m30s this week** (95% on the 1st press, −7pp, −8pp, −9pp...
   each further press, 50% floor). One click, no confirm. Repeatable, capped

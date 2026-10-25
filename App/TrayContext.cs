@@ -27,6 +27,8 @@ public class TrayContext : ApplicationContext
     private bool _dotaTold;
     private string? _seenForbiddenDay;
     private bool _forbiddenTold;
+    private string? _seenWindowKey;
+    private bool _windowTold;
 
     public TrayContext()
     {
@@ -117,6 +119,20 @@ public class TrayContext : ApplicationContext
                 _seenForbiddenDay = resp.LogicalDay;
                 _forbiddenTold = false;
             }
+            if (resp.OutsidePlayHours)
+            {
+                SetState($"Outside play hours — back {resp.NextPlayAllowedLocal:HH:mm}", TimeSpan.Zero);
+                var wkey = resp.NextPlayAllowedLocal.ToString("yyyy-MM-dd HH:mm");
+                if (wkey != _seenWindowKey) { _seenWindowKey = wkey; _windowTold = false; }
+                if (!_windowTold)
+                {
+                    _windowTold = true;
+                    string extra = (resp.Enforcing || resp.RemainingSeconds <= 0) ? " Daily budget also used up." : "";
+                    Balloon("Outside play hours", $"Steam blocked ({Limits.PlayHoursSummary}, weekends free). Back at {resp.NextPlayAllowedLocal:HH:mm}.{extra}");
+                }
+                _wasCooldown = false;
+                return;
+            }
             if (resp.Enforcing || resp.RemainingSeconds <= 0)
             {
                 SetState("Steam blocked until 03:00", TimeSpan.Zero);
@@ -150,6 +166,7 @@ public class TrayContext : ApplicationContext
             double remSafe = double.IsNaN(resp.RemainingSeconds) || double.IsInfinity(resp.RemainingSeconds) ? 0 : Math.Max(0, resp.RemainingSeconds);
             var left = TimeSpan.FromSeconds(Math.Min(remSafe, TimeSpan.MaxValue.TotalSeconds));
             string tip = (resp.Running ? $"Steam: {Hm(resp.RemainingSeconds)} left" : $"Paused: {Hm(resp.RemainingSeconds)} left")
+                + (resp.WindowEndsLocal != null ? $" • until {resp.WindowEndsLocal:HH:mm}" : "")
                 + (resp.DotaForbidden ? " • Dota forbidden M/W/F" : resp.DotaEnforcing ? " • Dota done" : "");
             bool sessionEnding = resp.SessionRemainingSeconds < resp.RemainingSeconds &&
                 resp.SessionRemainingSeconds <= Limits.WarnBefore.TotalSeconds && resp.SessionRemainingSeconds > 0;

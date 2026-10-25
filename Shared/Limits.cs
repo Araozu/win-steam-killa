@@ -4,6 +4,8 @@ namespace Shared;
 // Model: every play session is auto-tracked (no manual start). Each session can
 // use up to 2h of the day's budget; after every session a cooldown blocks Steam
 // equal to that session's length rounded up to 5 minutes.
+// Weekday play windows (Mon–Fri 05:45–06:15 + 20:30–22:00 local, weekends free):
+// outside the windows Steam is blocked and nothing accrues.
 public static class Limits
 {
     // Max continuous play session (every day).
@@ -21,6 +23,13 @@ public static class Limits
         DayOfWeek.Wednesday,
         DayOfWeek.Friday,
     };
+    // Weekday play windows (local wall-clock). Mon–Fri Steam may only run
+    // inside these ranges; Sat/Sun have no time restriction (budget/cooldown/
+    // Dota rules still apply). End is exclusive (22:00 means up to 21:59:59).
+    public static readonly TimeSpan WeekdayWindow1Start = new(5, 45, 0);
+    public static readonly TimeSpan WeekdayWindow1End = new(6, 15, 0);
+    public static readonly TimeSpan WeekdayWindow2Start = new(20, 30, 0);
+    public static readonly TimeSpan WeekdayWindow2End = new(22, 0, 0);
     public static readonly TimeSpan WarnBefore = TimeSpan.FromMinutes(15);
     // Borrow/advance: each press consumes BorrowCost of tomorrow's budget and
     // grants BorrowCost * effectiveness today. First press is 95% effective,
@@ -160,4 +169,49 @@ public static class Limits
         int mins = (int)Math.Ceiling(t.TotalMinutes);
         return $"{mins / 60}h {mins % 60:00}m";
     }
+
+    public static bool IsWeekend(DayOfWeek dow) =>
+        dow == DayOfWeek.Saturday || dow == DayOfWeek.Sunday;
+
+    // True when Steam is allowed to run at this local wall-clock moment.
+    // Weekends: always true. Weekdays: only inside the two play windows.
+    public static bool IsPlayAllowed(DateTime localNow)
+    {
+        if (IsWeekend(localNow.DayOfWeek)) return true;
+        var t = localNow.TimeOfDay;
+        if (t >= WeekdayWindow1Start && t < WeekdayWindow1End) return true;
+        if (t >= WeekdayWindow2Start && t < WeekdayWindow2End) return true;
+        return false;
+    }
+
+    // End of the current allowed window (local). Null when unrestricted
+    // (weekends) or currently blocked.
+    public static DateTime? CurrentWindowEndLocal(DateTime localNow)
+    {
+        if (IsWeekend(localNow.DayOfWeek)) return null;
+        var t = localNow.TimeOfDay;
+        var today = localNow.Date;
+        if (t >= WeekdayWindow1Start && t < WeekdayWindow1End) return today + WeekdayWindow1End;
+        if (t >= WeekdayWindow2Start && t < WeekdayWindow2End) return today + WeekdayWindow2End;
+        return null;
+    }
+
+    // Next local moment when play becomes allowed. Returns localNow when
+    // already allowed.
+    public static DateTime NextPlayAllowedLocal(DateTime localNow)
+    {
+        if (IsPlayAllowed(localNow)) return localNow;
+        // Blocked => must be a weekday (weekends never block).
+        var today = localNow.Date;
+        var t = localNow.TimeOfDay;
+        if (t < WeekdayWindow1Start) return today + WeekdayWindow1Start;
+        if (t < WeekdayWindow2Start) return today + WeekdayWindow2Start;
+        // After the evening window: tomorrow. Weekend starts at midnight,
+        // weekdays at the morning window.
+        var tomorrow = today.AddDays(1);
+        return IsWeekend(tomorrow.DayOfWeek) ? tomorrow : tomorrow + WeekdayWindow1Start;
+    }
+
+    public const string PlayHoursSummary = "Mon\u2013Fri 05:45\u201306:15 + 20:30\u201322:00";
+    public static string FormatClock(DateTime local) => local.ToString("HH:mm");
 }

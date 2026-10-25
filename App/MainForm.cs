@@ -639,7 +639,8 @@ public class MainForm : Form
         double dailyMax = r.BudgetSeconds > 0 ? r.BudgetSeconds : 1;
         double dotaMax = r.DotaBudgetSeconds > 0 ? r.DotaBudgetSeconds : Limits.DotaWeeklyBudget.TotalSeconds;
 
-        bool blocked = r.Enforcing || remaining <= 0;
+        bool windowBlocked = r.OutsidePlayHours;
+        bool blocked = r.Enforcing || remaining <= 0 || windowBlocked;
         bool cooling = !blocked && r.InCooldown;
 
         // Session bar fills UP with played time toward the 2h session max.
@@ -650,7 +651,14 @@ public class MainForm : Form
         string sessText;
         Color sessColor = SessionGreen;
         string sessMaxText = Hm(sessionMax);
-        if (blocked)
+        if (windowBlocked)
+        {
+            sessFill = 0;
+            sessText = $"back {r.NextPlayAllowedLocal:HH:mm}";
+            sessLimit = 0;
+            sessColor = CooldownRed;
+        }
+        else if (blocked)
         {
             sessFill = 0;
             sessText = "blocked";
@@ -677,9 +685,12 @@ public class MainForm : Form
             sessCap = sessionMax;
             sessFill = Math.Min(sessElapsed, sessCap);
             sessMaxText = Hm(sessCap);
-            // Reachable end of this session on today's budget; a borrow press
-            // pushes it out and the hatched zone shrinks.
-            sessLimit = Math.Min(sessionMax, sessElapsed + remaining);
+            // Reachable end of this session on today's budget (+ window end);
+            // a borrow press pushes it out and the hatched zone shrinks.
+            double windowLeft = r.WindowEndsLocal != null
+                ? Math.Max(0, (r.WindowEndsLocal.Value - DateTime.Now).TotalSeconds)
+                : double.PositiveInfinity;
+            sessLimit = Math.Min(sessionMax, Math.Min(sessElapsed + remaining, sessElapsed + windowLeft));
             sessText = $"{FormatCooldown(sessFill)} played";
         }
         else
@@ -687,7 +698,10 @@ public class MainForm : Form
             sessCap = sessionMax;
             sessFill = 0;
             sessMaxText = Hm(sessCap);
-            sessLimit = Math.Min(sessionMax, remaining);
+            double windowLeft = r.WindowEndsLocal != null
+                ? Math.Max(0, (r.WindowEndsLocal.Value - DateTime.Now).TotalSeconds)
+                : double.PositiveInfinity;
+            sessLimit = Math.Min(sessionMax, Math.Min(remaining, windowLeft));
             sessText = "ready";
         }
 
@@ -722,7 +736,16 @@ public class MainForm : Form
         // ---- kept text info below the bars ----
         // Blocked/cooldown state lives in the bars already (session bar shows
         // "blocked" / "cooldown Xm Ys"); no extra cooldown/blocked lines here.
-        if (r.Enforcing || remaining <= 0)
+        if (windowBlocked)
+        {
+            bool budgetGone = r.Enforcing || remaining <= 0;
+            _status.Text = budgetGone
+                ? $"Outside play hours — back at {r.NextPlayAllowedLocal:HH:mm} ({Limits.PlayHoursSummary}, weekends free). Daily budget also used up."
+                : $"Outside play hours — back at {r.NextPlayAllowedLocal:HH:mm} ({Limits.PlayHoursSummary}, weekends free).";
+            _status.Visible = true;
+            TrayContext.Instance?.SetState($"Outside play hours — back {r.NextPlayAllowedLocal:HH:mm}", TimeSpan.Zero);
+        }
+        else if (r.Enforcing || remaining <= 0)
         {
             _status.Text = "Blocked — daily budget used up.";
             _status.Visible = true;
@@ -737,19 +760,28 @@ public class MainForm : Form
         }
         else
         {
+            double windowLeft2 = r.WindowEndsLocal != null
+                ? Math.Max(0, (r.WindowEndsLocal.Value - DateTime.Now).TotalSeconds)
+                : double.PositiveInfinity;
             string sessionLine = r.Running
-                ? $"This session ends in {Hm(Math.Min(Math.Max(0, sessionMax - sessElapsed), Math.Max(0, remaining)))}, then a cooldown."
+                ? $"This session ends in {Hm(Math.Min(Math.Min(Math.Max(0, sessionMax - sessElapsed), Math.Max(0, remaining)), windowLeft2))}, then a cooldown."
                 : "";
             _status.Text = sessionLine;
             _status.Visible = !string.IsNullOrEmpty(sessionLine);
             var left = TimeSpan.FromSeconds(remaining);
             string tip = (r.Running ? $"Steam: {Hm(remaining)} left today" : $"Paused: {Hm(remaining)} left today")
+                + (r.WindowEndsLocal != null ? $" • until {r.WindowEndsLocal:HH:mm}" : "")
                 + (r.DotaForbidden ? " • Dota forbidden M/W/F" : r.DotaEnforcing ? " • Dota done" : "");
             TrayContext.Instance?.SetState(tip, left);
         }
 
         _detail.Text = BuildDetail(r, elapsed);
 
+        string hoursLine = r.OutsidePlayHours
+            ? $"\nPlay hours {Limits.PlayHoursSummary} (weekends free).\nBlocked until {r.NextPlayAllowedLocal:HH:mm}."
+            : r.WindowEndsLocal != null
+            ? $"\nPlay hours {Limits.PlayHoursSummary} (weekends free).\nPlayable until {r.WindowEndsLocal:HH:mm}."
+            : $"\nPlay hours {Limits.PlayHoursSummary} (weekends free).";
         _todayDetailLabel.Text = $"Budget {Hm(dailyMax)} total\nBase {Hm(r.BaseBudgetSeconds)} + carry {Hm(r.CarryInSeconds)}" +
             (r.BorrowedSeconds > 0 ? $" + borrow {Hm(r.BorrowedSeconds)}" : "") +
             (r.AdvanceDeductionSeconds > 0 ? $" − advance {Hm(r.AdvanceDeductionSeconds)}" : "") +
@@ -758,7 +790,7 @@ public class MainForm : Form
             (r.DotaBorrowedSeconds > 0 ? $" + borrow {Hm(r.DotaBorrowedSeconds)}" : "") +
             (r.DotaAdvanceDeductionSeconds > 0 ? $" − advance {Hm(r.DotaAdvanceDeductionSeconds)}" : "") +
             $"\nUsed {Hm(r.DotaUsedSeconds)}, left {Hm(dotaRem)}" +
-            (r.DotaForbidden ? "\nNo Dota on Mon / Wed / Fri." : "");
+            (r.DotaForbidden ? "\nNo Dota on Mon / Wed / Fri." : "") + hoursLine;
 
         _detectorLabel.Text = r.SteamRunning ? "Detector: Steam detected" : "Detector: nothing detected";
         _detectorDetailLabel.Text = "Sees now: " + DescribeSeen(r) + ".\n" +
@@ -774,7 +806,8 @@ public class MainForm : Form
         // Session state vs live detector: the two can legitimately differ for up
         // to ~15s (service tick), which used to look like "it never stops".
         // Process/PID details live in the Details section below.
-        string sess = r.Running ? "session OPEN (accruing)" : r.InCooldown ? "in cooldown (blocked)" : "no session (stopped)";
+        string sess = r.OutsidePlayHours ? $"outside play hours (back {r.NextPlayAllowedLocal:HH:mm})"
+            : r.Running ? "session OPEN (accruing)" : r.InCooldown ? "in cooldown (blocked)" : "no session (stopped)";
         lines.Add($"Timer {sess}.");
         int age = Math.Max(0, (int)elapsed);
         lines.Add($"Last poll {age}s ago — Recheck asks the service right now.");
