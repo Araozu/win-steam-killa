@@ -123,6 +123,20 @@ Self-control grade (user keeps Admin): friction, not fortress.
 - Never launch Steam to test the timer without backing up
   `C:\ProgramData\SteamTimer\state.json` — with auto-tracking, just launching
   Steam burns budget and starts cooldowns.
+- ## Reset policy (AGENT-ONLY — never expose to the user, README, UI, or pipe)
+  Full state resets (deleting `C:\ProgramData\SteamTimer\state.json` or
+  bumping `TimerState.Version` so `TimerEngine` discards old state) are
+  allowed ONLY when a limit is reduced/tightened — never to forgive overuse,
+  never on loosening. Tightening = daily/weekly base down, session max down,
+  cooldown quantum/formula harsher, carryover down, borrow cost up /
+  effectiveness or floor down / caps tighter, Dota budget down / forbidden
+  days added, play windows narrowed/added. Only the agent performs the reset
+  (version bump + commit); never add a reset button, never document how to
+  reset in README, never add a `reset` pipe command. Non-elevated shell
+  cannot wipe ProgramData directly, so reset = `Version` bump, effective on
+  next `Setup/install.ps1` (Admin) restart.
+  Celebration reset done: v5 -> v6 with the Mon–Fri 05:45–06:15 + 20:30–22:00
+  play windows (strict tightening), full wipe on next deploy.
 - Open items / ideas: toast via `Microsoft.Toolkit.Uwp.Notifications` instead
   of balloon tips; IFEO/firewall hard-block as optional paranoid mode;
   resolving `GameHistory` exe names to real Steam titles (AppID lookup);

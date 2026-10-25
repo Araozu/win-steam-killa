@@ -2,7 +2,7 @@ namespace Shared;
 
 public class TimerState
 {
-    public int Version { get; set; } = 5;
+    public int Version { get; set; } = 6;
     // Logical day "yyyy-MM-dd" (03:00 local -> 03:00 local). Base budget derives
     // from its weekday; effective budget includes carry-in and borrowing.
     public string LogicalDay { get; set; } = "";

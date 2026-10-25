@@ -40,9 +40,9 @@ public class TimerEngine
         _store = store ?? new StateStore();
         _utcNow = utcNow ?? (() => DateTime.UtcNow);
         _state = _store.Load();
-        if (_state != null && _state.Version != 5)
+        if (_state != null && _state.Version != 6)
         {
-            _log.LogInformation("Discarding v{Old} state; switching to automatic budget model.", _state.Version);
+            _log.LogInformation("Discarding v{Old} state; policy tightened (v6 play windows), fresh start.", _state.Version);
             _state = null;
             _store.Clear();
         }
@@ -103,7 +103,7 @@ public class TimerEngine
             deduction = old.BorrowCount * (int)Limits.BorrowCost.TotalSeconds;
         var st = new TimerState
         {
-            Version = 5,
+            Version = 6,
             LogicalDay = today,
             BaseBudgetSeconds = BaseSecondsFor(today),
             CarryInSeconds = AdjacentCarry(old, today),
