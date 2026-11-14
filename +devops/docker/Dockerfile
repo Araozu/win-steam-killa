@@ -1,0 +1,15 @@
+FROM mcr.microsoft.com/dotnet/sdk:11.0 AS build
+WORKDIR /src
+COPY WorkoutService/WorkoutService.csproj ./WorkoutService/
+RUN dotnet restore ./WorkoutService/WorkoutService.csproj
+COPY WorkoutService/ ./WorkoutService/
+RUN dotnet publish ./WorkoutService/WorkoutService.csproj -c Release -o /app --no-restore
+
+FROM mcr.microsoft.com/dotnet/aspnet:11.0
+WORKDIR /app
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+COPY --from=build /app .
+ENV ASPNETCORE_URLS=http://+:8080
+EXPOSE 8080
+VOLUME /data
+ENTRYPOINT ["dotnet", "WorkoutService.dll"]

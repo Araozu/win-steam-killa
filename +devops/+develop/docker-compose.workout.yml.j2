@@ -1,0 +1,30 @@
+services:
+  {{ project_name }}-workout-{{ project_stage }}:
+    image: ${{ project_name | upper }}_WORKOUT_REGISTRY_URL:${{ project_name | upper }}_WORKOUT_VERSION
+    container_name: {{ project_name }}-workout-{{ project_stage }}
+    restart: unless-stopped
+    environment:
+      - TZ=America/Santiago
+      - DATA_DIR=/data
+    env_file:
+      - .env.workout
+    volumes:
+      - ./workout-data:/data
+    networks:
+      - proxy
+      - {{ project_name }}-network-{{ project_stage }}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.{{ project_name }}-workout-{{ project_stage }}.rule=Host(`workouts.araoz.dev`)"
+      - "traefik.http.routers.{{ project_name }}-workout-{{ project_stage }}.entrypoints=websecure"
+      - "traefik.http.routers.{{ project_name }}-workout-{{ project_stage }}.tls=true"
+      - "traefik.http.routers.{{ project_name }}-workout-{{ project_stage }}.tls.certresolver=araoz-wildcard"
+      - "traefik.http.routers.{{ project_name }}-workout-{{ project_stage }}.tls.domains[0].main=araoz.dev"
+      - "traefik.http.routers.{{ project_name }}-workout-{{ project_stage }}.tls.domains[0].sans=*.araoz.dev"
+      - "traefik.http.services.{{ project_name }}-workout-{{ project_stage }}.loadbalancer.server.port=8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
