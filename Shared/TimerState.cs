@@ -129,7 +129,7 @@ public class PipeResponse
     public int NextDotaBorrowGainSeconds { get; set; }
     // True on forbidden days (logical day: Mon / Wed / Fri): Dota 2 forbidden, only Dota killed.
     public bool DotaForbidden { get; set; }
-    // --- weekday play windows (Mon–Fri 05:45–06:15 + 20:30–22:00, weekends free) ---
+    // --- weekday play windows (Mon–Fri 05:30–06:15 + 20:15–22:00, weekends free) ---
     // True when Steam is currently blocked by the clock (weekday outside windows).
     public bool OutsidePlayHours { get; set; }
     // Next local moment when play becomes allowed (= server local now when allowed).

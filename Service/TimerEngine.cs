@@ -548,7 +548,7 @@ public class TimerEngine
 
             bool inCooldown = st.CooldownUntilUtc > nowUtc;
 
-            // Weekday play windows (Mon–Fri 05:45–06:15 + 20:30–22:00, weekends free):
+            // Weekday play windows (Mon–Fri 05:30–06:15 + 20:15–22:00, weekends free):
             // outside the windows Steam is blocked, nothing accrues. Kills are
             // throttled to one pass per 60s; notifications once per block period.
             if (!playAllowed)

@@ -4,7 +4,7 @@ namespace Shared;
 // Model: every play session is auto-tracked (no manual start). Each session can
 // use up to 2h of the day's budget; after every session a cooldown blocks Steam
 // equal to that session's length rounded up to 5 minutes.
-// Weekday play windows (Mon–Fri 05:45–06:15 + 20:30–22:00 local, weekends free):
+// Weekday play windows (Mon–Fri 05:30–06:15 + 20:15–22:00 local, weekends free):
 // outside the windows Steam is blocked and nothing accrues.
 public static class Limits
 {
@@ -26,9 +26,9 @@ public static class Limits
     // Weekday play windows (local wall-clock). Mon–Fri Steam may only run
     // inside these ranges; Sat/Sun have no time restriction (budget/cooldown/
     // Dota rules still apply). End is exclusive (22:00 means up to 21:59:59).
-    public static readonly TimeSpan WeekdayWindow1Start = new(5, 45, 0);
+    public static readonly TimeSpan WeekdayWindow1Start = new(5, 30, 0);
     public static readonly TimeSpan WeekdayWindow1End = new(6, 15, 0);
-    public static readonly TimeSpan WeekdayWindow2Start = new(20, 30, 0);
+    public static readonly TimeSpan WeekdayWindow2Start = new(20, 15, 0);
     public static readonly TimeSpan WeekdayWindow2End = new(22, 0, 0);
     public static readonly TimeSpan WarnBefore = TimeSpan.FromMinutes(15);
     // Borrow/advance: each press consumes BorrowCost of tomorrow's budget and
@@ -212,6 +212,6 @@ public static class Limits
         return IsWeekend(tomorrow.DayOfWeek) ? tomorrow : tomorrow + WeekdayWindow1Start;
     }
 
-    public const string PlayHoursSummary = "Mon\u2013Fri 05:45\u201306:15 + 20:30\u201322:00";
+    public const string PlayHoursSummary = "Mon\u2013Fri 05:30\u201306:15 + 20:15\u201322:00";
     public static string FormatClock(DateTime local) => local.ToString("HH:mm");
 }
