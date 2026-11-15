@@ -74,8 +74,6 @@ ungrouped:
                         credentialsId: SSH_CRED,
                         inventory: "inventory.yml",
                         playbook: "../ansible/service_pull_and_setup.yml",
-                        vaultCredentialsId: "ansible-vault-steamtimer-key",
-                        extras: "--extra-vars '@vault.yml'",
                         extraVars: [
                             _remote_folder: REMOTE_FOLDER,
                             _image_tag: BUILD_REF,

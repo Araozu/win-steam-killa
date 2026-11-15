@@ -70,15 +70,15 @@ volumes:
 from repo root), `+develop/Jenkinsfile` (builds + pushes
 `docker.io/araozu/steamtimer-workout-develop`, then runs the ansible playbooks),
 `ansible/*.yml` (creates `/home/docker_admin/steamtimer-develop/`, writes
-`.version.workout` + `.env.workout` from vault, templates the compose files,
+`.version.workout`, templates the compose files,
 `docker compose up`), `+develop/docker-compose.workout.yml.j2` (Traefik host
 `workouts.araoz.dev`, `./workout-data:/data`, healthcheck on `/health`).
 
-Setup: `cp +devops/+develop/vault.yml.example +devops/+develop/vault.yml`,
-fill in Strava/API_TOKEN values, `ansible-vault encrypt +devops/+develop/vault.yml`,
-create Jenkins vault credential `ansible-vault-steamtimer-key`, set `REMOTE_IP`
-in the Jenkinsfile to the VPS. The container reads secrets from `.env.workout`
-(`DATA_DIR=/data`); no DB, no EF bundle.
+Setup: copy `+devops/+develop/.env.workout.example` to
+`/home/docker_admin/steamtimer-develop/.env.workout` on the VPS over SSH and
+fill in Strava/API_TOKEN values. Ansible only checks the file exists, it never
+writes it. Set `REMOTE_IP` in the Jenkinsfile to the VPS. The container reads
+secrets from `.env.workout` (`DATA_DIR=/data`); no DB, no EF bundle.
 
 ## API
 
