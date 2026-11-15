@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.1" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="11.0.0" />
+    <ProjectReference Include="../Shared/Shared.csproj" />
+    <ProjectReference Include="../WorkoutService/WorkoutService.csproj" />
+    <!-- Exercise the production engine on Linux without starting Windows services. -->
+    <Compile Include="../Service/TimerEngine.cs" Link="Service/TimerEngine.cs" />
+    <Compile Include="../Service/StateStore.cs" Link="Service/StateStore.cs" />
+    <Compile Include="../Service/Killer.cs" Link="Service/Killer.cs" />
+    <Compile Include="../Service/PlayProcesses.cs" Link="Service/PlayProcesses.cs" />
+    <Using Include="Microsoft.Extensions.Logging" />
+    <Using Include="Xunit" />
+  </ItemGroup>
+</Project>

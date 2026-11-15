@@ -1,3 +1,13 @@
+# Current review notes
+
+See `REVIEW.md` for the current implementation and verification. The notes below
+are historical; in particular, Dota is now 8h/week, state is v6, and the complete
+solution includes the .NET 11 WorkoutService and cross-platform regression tests.
+The Windows app does not yet consume workout credits. No state version bump was
+made during the review.
+
+---
+
 # SteamTimer — agent handover
 
 ## What this is

@@ -127,7 +127,7 @@ public static class Limits
     // True when this logical day ("yyyy-MM-dd") forbids Dota 2 entirely.
     public static bool IsDotaForbiddenLogicalDay(string logicalDay)
     {
-        if (DateTime.TryParse(logicalDay, out var d))
+        if (LogicalDay.TryParse(logicalDay, out var d))
             return DotaForbiddenDays.Contains(d.DayOfWeek);
         return false;
     }
@@ -145,10 +145,10 @@ public static class Limits
     // Week runs Mon 03:00 local -> next Mon 03:00 local.
     public static string WeekStartForLogicalDay(string logicalDay)
     {
-        if (DateTime.TryParse(logicalDay, out var d))
+        if (LogicalDay.TryParse(logicalDay, out var d))
         {
             int back = ((int)d.DayOfWeek + 6) % 7; // Monday => 0 ... Sunday => 6
-            return d.Date.AddDays(-back).ToString("yyyy-MM-dd");
+            return d.Date.AddDays(-back).ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
         }
         return logicalDay;
     }

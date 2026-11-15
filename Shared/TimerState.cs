@@ -51,7 +51,16 @@ public class TimerState
     // Resets on day rollover (fresh state each logical day).
     public bool DotaForbiddenNotified { get; set; }
 
-    public TimerState Copy() => (TimerState)MemberwiseClone();
+    public TimerState Copy()
+    {
+        var copy = (TimerState)MemberwiseClone();
+        copy.SeenGames = new(SeenGames);
+        copy.GameHistory = GameHistory.Select(g => new GameRecord
+        {
+            Name = g.Name, Path = g.Path, TotalSeconds = g.TotalSeconds, LastSeenUtc = g.LastSeenUtc,
+        }).ToList();
+        return copy;
+    }
 }
 
 // One observed Steam child game: identity crumbs so we can later map exe names

@@ -20,13 +20,26 @@ public class StateStore
     {
         lock (_lock)
         {
-            try
+            bool found = false;
+            foreach (var path in new[] { _file, _file + ".bak" })
             {
-                if (!File.Exists(_file)) return null;
-                var json = File.ReadAllText(_file);
-                return JsonSerializer.Deserialize<TimerState>(json);
+                if (!File.Exists(path)) continue;
+                found = true;
+                try
+                {
+                    var state = JsonSerializer.Deserialize<TimerState>(File.ReadAllText(path));
+                    if (state != null && state.Version != 6) return state; // Engine owns policy migrations.
+                    if (state != null && LogicalDay.TryParse(state.LogicalDay, out _)
+                        && state.SeenGames != null && state.GameHistory != null
+                        && double.IsFinite(state.UsedSeconds) && state.UsedSeconds >= 0
+                        && double.IsFinite(state.SessionUsedSeconds) && state.SessionUsedSeconds >= 0
+                        && double.IsFinite(state.DotaUsedSeconds) && state.DotaUsedSeconds >= 0)
+                        return state;
+                }
+                catch (JsonException) { }
             }
-            catch { return null; }
+            if (found) throw new InvalidDataException("SteamTimer state and backup are unreadable; refusing to erase usage.");
+            return null;
         }
     }
 
@@ -43,7 +56,8 @@ public class StateStore
                     JsonSerializer.Serialize(file, state, JsonOpts);
                     file.Flush(flushToDisk: true);
                 }
-                File.Move(tmp, _file, overwrite: true);
+                if (File.Exists(_file)) File.Replace(tmp, _file, _file + ".bak");
+                else File.Move(tmp, _file);
             }
             finally { if (File.Exists(tmp)) File.Delete(tmp); }
         }
@@ -53,7 +67,8 @@ public class StateStore
     {
         lock (_lock)
         {
-            try { if (File.Exists(_file)) File.Delete(_file); } catch { }
+            foreach (var path in new[] { _file, _file + ".bak" })
+                if (File.Exists(path)) File.Delete(path);
         }
     }
 }

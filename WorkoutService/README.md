@@ -1,7 +1,8 @@
 # WorkoutService (Option A: Mi Fitness -> Strava -> VPS -> SteamTimer)
 
 Thin ASP.NET Minimal API (.NET 11) that caches Strava activities and serves daily workout credit.
-SteamTimer will poll `GET /api/credit?day=yyyy-MM-dd` with a bearer token.
+The credit endpoint is `GET /api/credit?day=yyyy-MM-dd` with a bearer token.
+The Windows SteamTimer client does not yet fetch or apply these credits.
 
 Rule served: `dotaSeconds = workoutSeconds * WORKOUT_MULTIPLIER` (default 4x),
 `day` = logical day (03:00 reset in `USER_TIMEZONE`, must match the PC timezone).
@@ -11,7 +12,9 @@ Rule served: `dotaSeconds = workoutSeconds * WORKOUT_MULTIPLIER` (default 4x),
 1. Create a Strava API app, set Authorization Callback Domain to your host
    (e.g. `workouts.example.com`), note client ID/secret.
 2. Deploy with env below, `STRAVA_REDIRECT_URI=https://<host>/auth/callback`.
-3. Visit `https://<host>/auth/login`, authorize `activity:read_all`.
+3. Visit `https://<host>/auth/login`, enter your `API_TOKEN` in the password form,
+   then authorize `activity:read_all`. Linking uses a 10-minute, single-use state
+   tied to that browser; account changes clear previously cached activities.
 4. `GET /auth/status` should return `{"linked":true}`.
 
 Phone side: `Mi Fitness` cloud sync ON, `Profile > Third-party data > Strava` linked.
@@ -80,12 +83,19 @@ in the Jenkinsfile to the VPS. The container reads secrets from `.env.workout`
 ## API
 
 * `GET /health` -> `{ok,timeUtc}` (public)
-* `GET /auth/login` -> 302 to Strava (public)
-* `GET /auth/callback?code=` -> stores tokens (public, Strava calls it)
+* `GET /auth/login` -> owner token form; Bearer-authenticated requests redirect directly to Strava
+* `POST /auth/login` -> form field `token=API_TOKEN`, then 302 to Strava
+* `GET /auth/callback?code=&state=&scope=` -> stores tokens after state/cookie/scope validation
 * `GET /auth/status` -> `{linked,expiresAtUtc}` (public, no secrets)
 * `POST /api/sync` -> force poll (Bearer)
 * `GET /api/credit?day=2026-11-14` -> `{day,workoutSeconds,dotaSeconds,multiplier,activityCount,updatedAtUtc,activities[]}` (Bearer). `day` omitted = current logical day.
-* `GET /api/activities?from=&to=` -> cached dump (Bearer, debug)
+* `GET /api/activities?from=&to=` -> cached dump, inclusive logical-day range (Bearer, debug)
 
-SteamTimer polls `/api/credit?day=<logicalDay>` every few minutes:
-`Authorization: Bearer <API_TOKEN>`. No credit on error (fail-closed).
+For a future Windows integration, use `Authorization: Bearer <API_TOKEN>` and
+`/api/credit?day=<logicalDay>`. Dates must be exactly `yyyy-MM-dd`. Invalid timezones,
+negative durations, and non-finite/negative multipliers stop startup.
+
+Sync replaces the last 30 days of activities only after every page succeeds, so
+deleted workouts disappear after a successful sync. Failed syncs preserve the
+last cache. Token refreshes and syncs are serialized; JSON writes are atomic.
+Historical credit queries outside the cached period return no activities.

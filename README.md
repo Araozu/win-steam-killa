@@ -35,8 +35,9 @@ After the budget is used, kills Steam + games and keeps enforcing until 03:00.
 
 ## Use (you need nothing about Windows)
 
-1. Right-click `Setup/install.ps1` → **Run with PowerShell as Administrator**.
-2. Open **Steam Timer** from Start to see budget / session / cooldown / Dota.
+1. Install the .NET 10 SDK and .NET 10 Desktop Runtime on Windows.
+2. Open PowerShell **as Administrator**, go to this repository, and run `./Setup/install.ps1`.
+3. Open **Steam Timer** from Start to see budget / session / cooldown / Dota.
    The tray icon quietly shows remaining time. At 15 min left: warning.
    At deadline: Steam is closed + blocked until 03:00.
    Closing the window does NOT stop the timer.
@@ -54,12 +55,23 @@ After the budget is used, kills Steam + games and keeps enforcing until 03:00.
 
 ## Dev
 
-```powershell
-dotnet build SteamTimer.slnx
+Install .NET 11 SDK to build the complete solution (WorkoutService targets .NET 11;
+App/Service/Shared target .NET 10). The Windows projects can also be compiled on
+Linux and macOS; the service and tray UI require Windows to run.
+
+```sh
+dotnet build SteamTimer.slnx -c Release
+dotnet test Tests/Tests.csproj -c Release --no-build
+pwsh -NoProfile -File Tests/VerifySetup.ps1
 ```
 
-Requires .NET 10 SDK + Windows. Service must run on Windows
-(EventLog, Toolhelp32, named pipes).
+The tests run the production timer engine with a simulated clock/process list,
+and exercise the workout HTTP endpoints with a fake Strava server. CI runs
+builds, tests, and setup-script checks on Linux and Windows. See `REVIEW.md` for
+fixes and remaining Windows runtime checks.
+
+`WorkoutService/` is a separate Strava-backed HTTP API. The Windows limiter
+currently does **not** fetch or apply its workout credits.
 
 ## Notes / limits
 
@@ -69,5 +81,6 @@ Requires .NET 10 SDK + Windows. Service must run on Windows
   Dota lockouts kill only `dota2` processes.
 - The service logs observed Steam child games (exe name + path + time) in
   state for future precise per-game tracking.
-- To fully reset: `Setup/uninstall.ps1` as admin, then delete
-  `C:\ProgramData\SteamTimer`.
+- Uninstall with `Setup/uninstall.ps1` as admin; usage history is retained.
+- State writes retain a backup. A corrupt primary is recovered from that backup;
+  if both are invalid, service startup fails instead of silently clearing usage.

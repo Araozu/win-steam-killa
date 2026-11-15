@@ -35,6 +35,11 @@ public class PipeServer
                 ps.AddAccessRule(new PipeAccessRule(
                     new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
                     PipeAccessRights.ReadWrite, AccessControlType.Allow));
+                // Subsequent server instances need CreateNewInstance, which
+                // ReadWrite does not grant to the SYSTEM service account.
+                ps.AddAccessRule(new PipeAccessRule(
+                    new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+                    PipeAccessRights.FullControl, AccessControlType.Allow));
                 server = NamedPipeServerStreamAcl.Create(
                     Limits.PipeName, PipeDirection.InOut, maxNumberOfServerInstances: 4,
                     PipeTransmissionMode.Message, PipeOptions.Asynchronous,
@@ -61,13 +66,26 @@ public class PipeServer
         {
             try
             {
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeout.CancelAfter(TimeSpan.FromSeconds(15));
                 using var reader = new StreamReader(pipe, leaveOpen: true);
                 using var writer = new StreamWriter(pipe, leaveOpen: true) { AutoFlush = true };
-                string? line = await reader.ReadLineAsync(ct).ConfigureAwait(false);
+                // A silent client must not occupy one of the four instances forever.
+                // Bound the line too: requests contain just a short command.
+                var lineBuffer = new System.Text.StringBuilder();
+                var one = new char[1];
+                while (lineBuffer.Length <= 4096)
+                {
+                    int n = await reader.ReadAsync(one.AsMemory(), timeout.Token).ConfigureAwait(false);
+                    if (n == 0 || one[0] == '\n') break;
+                    lineBuffer.Append(one[0]);
+                }
+                if (lineBuffer.Length > 4096) return;
+                string line = lineBuffer.ToString();
                 if (string.IsNullOrWhiteSpace(line)) return;
                 var req = JsonSerializer.Deserialize<PipeRequest>(line);
                 PipeResponse resp = _engine.Handle(req);
-                await writer.WriteLineAsync(JsonSerializer.Serialize(resp)).ConfigureAwait(false);
+                await writer.WriteLineAsync(JsonSerializer.Serialize(resp).AsMemory(), timeout.Token).ConfigureAwait(false);
             }
             catch (Exception ex) { _log.LogDebug(ex, "pipe handle failed"); }
         }

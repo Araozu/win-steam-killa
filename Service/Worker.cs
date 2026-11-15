@@ -14,7 +14,6 @@ public sealed class Worker : BackgroundService
         _engine = engine;
         _pipe = pipe;
         _log = log;
-        _engine.Notify += (t, b) => WriteEvent($"{t} — {b}", EventLogEntryType.Information);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)

@@ -85,7 +85,7 @@ public class MainForm : Form
             string text = string.IsNullOrEmpty(DisplayText) ? "" : DisplayText;
             if (text.Length > 0)
             {
-                var fmt = new StringFormat
+                using var fmt = new StringFormat
                 {
                     Alignment = StringAlignment.Center,
                     LineAlignment = StringAlignment.Center,
@@ -155,6 +155,7 @@ public class MainForm : Form
     private string? _lastNote;
     private bool _serviceOk = true;
     private bool _busy;
+    private bool _syncing;
 
     public MainForm()
     {
@@ -333,15 +334,22 @@ public class MainForm : Form
 
     private async Task SyncFromServiceAsync()
     {
-        var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "status" });
-        if (resp == null || !resp.Ok)
+        if (_syncing || IsDisposed) return;
+        _syncing = true;
+        try
         {
-            _serviceOk = false;
-            RefreshCountdown();
-            return;
+            var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "status" });
+            if (IsDisposed) return;
+            if (resp == null || !resp.Ok)
+            {
+                _serviceOk = false;
+                RefreshCountdown();
+                return;
+            }
+            _serviceOk = true;
+            UpdateFromStatus(resp);
         }
-        _serviceOk = true;
-        UpdateFromStatus(resp);
+        finally { _syncing = false; }
     }
 
     private async Task RecheckAsync()
@@ -404,7 +412,7 @@ public class MainForm : Form
     {
         if (_busy) return;
         // Sunday pre-check (service is the source of truth and re-checks).
-        if (_last != null && DateTime.TryParse(_last.LogicalDay, out var ld) && ld.DayOfWeek == DayOfWeek.Sunday)
+        if (_last != null && LogicalDay.TryParse(_last.LogicalDay, out var ld) && ld.DayOfWeek == DayOfWeek.Sunday)
         {
             MessageBox.Show("Borrow is unavailable on Sundays — enjoy the 4h budget.",
                 "Steam Timer — borrow", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -627,12 +635,14 @@ public class MainForm : Form
         RefreshBorrowButton(r);
         RefreshDotaBorrowButton(r);
         // Estimate live values between 15s polls while things run.
-        double elapsed = (DateTime.Now - _lastPollLocal).TotalSeconds;
+        double elapsed = Math.Max(0, (DateTime.Now - _lastPollLocal).TotalSeconds);
+        double estimate = Math.Min(elapsed, 30); // Never count indefinitely on a stale snapshot.
+        bool accruing = r.Running && !r.InCooldown && !r.OutsidePlayHours && !r.Enforcing;
         double remaining = r.RemainingSeconds;
-        if (r.Running && remaining > 0) remaining = Math.Max(0, remaining - elapsed);
-        double sessElapsed = r.SessionElapsedSeconds + (r.Running ? elapsed : 0);
+        if (accruing && remaining > 0) remaining = Math.Max(0, remaining - estimate);
+        double sessElapsed = r.SessionElapsedSeconds + (accruing ? estimate : 0);
         double dotaRem = r.DotaRemainingSeconds;
-        if (r.DotaRunning && dotaRem > 0) dotaRem = Math.Max(0, dotaRem - elapsed);
+        if (accruing && r.DotaRunning && !r.DotaEnforcing && dotaRem > 0) dotaRem = Math.Max(0, dotaRem - estimate);
 
         // ---- bars: session fills up with played time; today/Dota drain down ----
         double sessionMax = r.SessionMaxSeconds > 0 ? r.SessionMaxSeconds : Limits.SessionMax.TotalSeconds;
@@ -776,6 +786,12 @@ public class MainForm : Form
         }
 
         _detail.Text = BuildDetail(r, elapsed);
+        if (!_serviceOk || elapsed > 30)
+        {
+            _status.Text = "Service unreachable — showing last known state. Hit Recheck now.";
+            _status.Visible = true;
+            TrayContext.Instance?.SetState("Service unreachable — showing last known state", null);
+        }
 
         string hoursLine = r.OutsidePlayHours
             ? $"\nPlay hours {Limits.PlayHoursSummary} (weekends free).\nBlocked until {r.NextPlayAllowedLocal:HH:mm}."

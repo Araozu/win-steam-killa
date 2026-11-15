@@ -35,8 +35,7 @@ public static class Killer
 
     // Kill Steam subtree plus any extra exe names (orphaned games whose Steam
     // parent already exited). extraExeNames are bare process names, any case.
-    // When knownGames has a recorded path for a name, an orphan with that name
-    // is only killed if its live path matches (prevents a poisoned remembered
+    // Orphans require a recorded matching path (prevents a poisoned remembered
     // name like "launcher" from killing an unrelated process).
     public static int KillPlaySet(IEnumerable<string>? extraExeNames, ILogger? log = null) =>
         KillPlaySet(extraExeNames, knownGames: null, log);
@@ -50,7 +49,7 @@ public static class Killer
             {
                 var parentOf = BuildParentMap();
                 var steamRoots = new HashSet<int>(
-                    all.Where(p => IsSteamName(SafeName(p))).Select(SafeId).Where(id => id > 0));
+                    all.Where(p => IsSteamName(SafeName(p)) || IsDotaName(SafeName(p))).Select(SafeId).Where(id => id > 0));
 
                 var extra = new HashSet<string>(
                     extraExeNames ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
@@ -65,7 +64,9 @@ public static class Killer
                     if (id <= 0) continue;
                     if (steamRoots.Contains(id) || HasSteamAncestor(id, steamRoots, parentOf))
                         targets.Add(p);
-                    else if (extra.Count > 0 && extra.Contains(SafeName(p)) && OrphanPathMatches(SafeName(p), SafePath(p), knownPaths))
+                    else if (extra.Count > 0 && extra.Contains(SafeName(p))
+                        && knownPaths.TryGetValue(SafeName(p), out var paths)
+                        && paths.Contains(SafePath(p), StringComparer.OrdinalIgnoreCase))
                         targets.Add(p);
                 }
                 return KillTargets(targets, parentOf, log);
@@ -144,7 +145,9 @@ public static class Killer
     {
         try
         {
-            return Process.GetProcesses().Any(p => IsSteamName(SafeName(p)));
+            var all = Process.GetProcesses();
+            try { return all.Any(p => IsSteamName(SafeName(p))); }
+            finally { foreach (var p in all) p.Dispose(); }
         }
         catch { return false; }
     }
@@ -192,12 +195,10 @@ public static class Killer
                     all.Where(p => IsClientName(SafeName(p))).Select(SafeId).Where(id => id > 0));
                 foreach (var p in all.Where(p => IsClientName(SafeName(p))).Take(20))
                     clients.Add($"{SafeName(p)} ({SafeId(p)})");
-                var liveNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 bool dotaAlive = false;
                 foreach (var p in all)
                 {
                     string n = SafeName(p);
-                    if (!string.IsNullOrEmpty(n)) liveNames.Add(n);
                     if (!string.IsNullOrEmpty(n) && IsDotaName(n)) dotaAlive = true;
                 }
                 foreach (var p in all)
@@ -239,7 +240,7 @@ public static class Killer
                     }
                 }
                 bool playing;
-                if (clientRoots.Count > 0 || games.Count > 0) playing = true;
+                if (clientRoots.Count > 0 || games.Count > 0 || dotaAlive) playing = true;
                 else if (orphans.Count > 0) playing = true;
                 else playing = false;
                 return new DetailedSnapshot(playing, dotaAlive, games, clients, orphans);
@@ -263,10 +264,6 @@ public static class Killer
         }
         return map;
     }
-
-    // One live path check (for kills): name already matched.
-    private static bool OrphanPathMatches(string name, string livePath, Dictionary<string, List<string>> knownPaths) =>
-        OrphanPathsMatch(name, new[] { livePath }, knownPaths);
 
     private static bool OrphanPathsMatch(string name, IEnumerable<string> livePaths, Dictionary<string, List<string>> knownPaths)
     {

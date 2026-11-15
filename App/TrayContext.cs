@@ -29,6 +29,7 @@ public class TrayContext : ApplicationContext
     private bool _forbiddenTold;
     private string? _seenWindowKey;
     private bool _windowTold;
+    private bool _disposed;
 
     public TrayContext()
     {
@@ -87,12 +88,17 @@ public class TrayContext : ApplicationContext
 
     private async Task PollAsync()
     {
-        if (_polling) return;
+        if (_polling || _disposed) return;
         _polling = true;
         try
         {
             var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "status" });
-            if (resp == null || !resp.Ok) return;
+            if (_disposed) return;
+            if (resp == null || !resp.Ok)
+            {
+                SetState("Service unreachable — is SteamTimer running?", null);
+                return;
+            }
             // The form is display-only: its bugs must never take down the poll
             // loop that owns all balloon notifications.
             try { _form?.UpdateFromStatus(resp); } catch { }
@@ -168,7 +174,7 @@ public class TrayContext : ApplicationContext
             string tip = (resp.Running ? $"Steam: {Hm(resp.RemainingSeconds)} left" : $"Paused: {Hm(resp.RemainingSeconds)} left")
                 + (resp.WindowEndsLocal != null ? $" • until {resp.WindowEndsLocal:HH:mm}" : "")
                 + (resp.DotaForbidden ? " • Dota forbidden M/W/F" : resp.DotaEnforcing ? " • Dota done" : "");
-            bool sessionEnding = resp.SessionRemainingSeconds < resp.RemainingSeconds &&
+            bool sessionEnding = resp.Running && resp.SessionRemainingSeconds < resp.RemainingSeconds &&
                 resp.SessionRemainingSeconds <= Limits.WarnBefore.TotalSeconds && resp.SessionRemainingSeconds > 0;
             bool dotaLow = resp.DotaRunning && !resp.DotaForbidden && !resp.DotaEnforcing &&
                 resp.DotaRemainingSeconds <= Limits.WarnBefore.TotalSeconds && resp.DotaRemainingSeconds > 0;
@@ -228,6 +234,7 @@ public class TrayContext : ApplicationContext
 
     public void SetState(string tooltip, TimeSpan? left)
     {
+        if (_disposed) return;
         try { _icon.Text = tooltip.Length > 63 ? tooltip[..63] : tooltip; } catch { }
         if (left == null) _icon.Icon = SystemIcons.Shield;
         else if (left == TimeSpan.Zero) _icon.Icon = SystemIcons.Error;
@@ -238,6 +245,21 @@ public class TrayContext : ApplicationContext
     public void Balloon(string title, string body)
     {
         try { _icon.ShowBalloonTip(8000, title, body, ToolTipIcon.Warning); } catch { }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing && !_disposed)
+        {
+            _disposed = true;
+            _poll.Dispose();
+            _form?.Dispose();
+            _icon.Visible = false;
+            _icon.ContextMenuStrip?.Dispose();
+            _icon.Dispose();
+            Instance = null;
+        }
+        base.Dispose(disposing);
     }
 
     private bool _acting;

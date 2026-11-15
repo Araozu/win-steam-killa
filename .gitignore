@@ -5,6 +5,10 @@
 
 # dotenv files
 .env
+.env.*
+!*.example
++devops/+*/vault.yml
++devops/+*/inventory.yml
 
 # User-specific files
 *.rsuser

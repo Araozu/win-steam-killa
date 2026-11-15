@@ -6,5 +6,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>WorkoutService</RootNamespace>
   </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Tests" />
+  </ItemGroup>
 
 </Project>
