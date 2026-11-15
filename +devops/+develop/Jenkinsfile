@@ -11,9 +11,8 @@ pipeline {
         REMOTE_IP     = "localhost"
         REMOTE_FOLDER = "/home/docker_admin/${PROJECT_NAME}-${PROJECT_STAGE}/"
 
-        REGISTRY_CREDENTIALS = "f16149d3-8913-40f9-80ff-9eca92eef798"
-        REGISTRY_URL         = "docker.io"
-        REGISTRY_USER        = "araozu"
+        REGISTRY_URL         = "git.araoz.dev"
+        REGISTRY_USER        = "fernando"
         PROJECT_TRIPLET   = "${PROJECT_NAME}-${PROJECT_SERVICE}-${PROJECT_STAGE}"
         FULL_REGISTRY_URL = "${REGISTRY_URL}/${REGISTRY_USER}/${PROJECT_TRIPLET}"
 
@@ -41,11 +40,7 @@ ungrouped:
                 stage("Build & Push") {
                     steps {
                         script {
-                            docker.withRegistry("https://${REGISTRY_URL}", REGISTRY_CREDENTIALS) {
-                                def img = docker.build("${FULL_REGISTRY_URL}:${BUILD_REF}", "-f +devops/docker/Dockerfile .")
-                                img.push()
-                                img.push("latest")
-                            }
+                            def img = docker.build("${FULL_REGISTRY_URL}:${BUILD_REF}", "-f +devops/docker/Dockerfile .")
                         }
                     }
                 }
