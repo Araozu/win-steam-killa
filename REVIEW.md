@@ -1,6 +1,32 @@
 # Code review and fixes
 
-## Current review: Notify/Tasker capture stage (2026-11-16)
+## Current review: WPF port (2026-11-16)
+
+Compared the WPF app with the preceding WinForms implementation. Fixed:
+
+- Failed tray polls now invalidate the window's cached status. A visible status
+  line reports offline/stale data, the headline becomes unknown, and the window
+  no longer overwrites the tray's offline warning with a cached countdown.
+  Snapshot age uses a monotonic clock and estimates stop after 30 seconds.
+- The headline includes the two-hour session limit while stopped and the Dota
+  allowance while Dota is active. Global blocks always show zero. Estimates stop
+  consuming time at the first known Steam deadline.
+- Empty effective budgets display as zero, including workout-gated Dota, rather
+  than substituting the eight-hour weekly cap. Startup uses unknown placeholders
+  instead of mock times and bars.
+- Borrow controls identify tomorrow/next week, restore their remaining balances,
+  and explain the ten-minute cost and actual gain. Actions stay disabled while a
+  command is pending; borrowing also requires current status and available credit.
+- Action results/errors remain visible with Details collapsed. Window sizing
+  respects the monitor work area in WPF units, and a minimum width keeps the
+  headline readable during resizing.
+
+Validation: Release solution build, 64 regression tests (15 new UI-state cases),
+setup-script checks, and Windows x64 app publishing. WPF rendering, high DPI,
+tray interaction, second-instance activation, and Windows session shutdown still
+need an interactive Windows smoke test; Linux compilation cannot exercise them.
+
+## Notify/Tasker capture-stage review (2026-11-16)
 
 Strava integration and OAuth are removed. `WorkoutService` is a toy authenticated
 raw-body capture server, with atomic per-request JSON files under

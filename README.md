@@ -60,7 +60,7 @@ After the budget is used, kills Steam + games and keeps enforcing until 03:00.
   `Workout:ApiToken` (or `WORKOUT_BASE_URL` / `WORKOUT_API_TOKEN` env visible to
   the service). Settings are loaded beside the service executable; nonblank
   structured settings take precedence over these aliases.
-- `App/` — WinForms info window + quiet tray (`NotifyIcon` tooltip = countdown,
+- `App/` — WPF card window + quiet WinForms tray (`NotifyIcon` tooltip = countdown,
   balloons only for warnings/kill/cooldown/Dota).
 - `Shared/` — `Limits` (2h session max, len-based cooldown, 30m carryover,
   workout-gated Dota up to 8h/week), `LogicalDay` (03:00 reset), pipe DTOs.

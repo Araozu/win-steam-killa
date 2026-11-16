@@ -122,7 +122,12 @@ public sealed class TrayIcon : IDisposable
         {
             var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "status" });
             if (_disposed) return;
-            if (resp == null || !resp.Ok) { SetState("Service unreachable — is SteamTimer running?", null); return; }
+            if (resp == null || !resp.Ok)
+            {
+                _getWindow()?.MarkServiceUnavailable();
+                SetState("Service unreachable — is SteamTimer running?", null);
+                return;
+            }
             try { _getWindow()?.UpdateFromStatus(resp); } catch { }
             try { _borrowMenuItem.Text = Limits.BorrowButtonText(resp.BorrowCount); } catch { }
             try { _dotaBorrowMenuItem.Text = Limits.DotaBorrowButtonText(resp.DotaBorrowCount); } catch { }

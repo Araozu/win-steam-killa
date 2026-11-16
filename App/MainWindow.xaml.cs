@@ -8,19 +8,19 @@ namespace App;
 public partial class MainWindow : Window
 {
     private TrayIcon? _tray;
-    private PipeResponse? _last;
-    private DateTime _lastPollLocal = DateTime.Now;
+    private readonly TimerViewState _state = new();
     private string? _lastNote;
-    private bool _serviceOk = true;
     private bool _busy;
+    private bool _syncing;
     private bool _allowClose;
     private readonly DispatcherTimer _uiTimer = new() { Interval = TimeSpan.FromSeconds(1) };
 
-    private double _todFrac, _sessFrac = 0.45, _dayFrac = 0.2, _dotaFrac = 0.65;
+    private double _todFrac, _sessFrac, _dayFrac, _dotaFrac;
 
     public MainWindow()
     {
         InitializeComponent();
+        RefreshCountdown();
         _uiTimer.Tick += (_, _) => RefreshCountdown();
         _uiTimer.Start();
         TodTrack.SizeChanged += (_, _) => ApplyFills();
@@ -31,6 +31,18 @@ public partial class MainWindow : Window
     }
 
     public void SetTray(TrayIcon tray) => _tray = tray;
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        var screen = System.Windows.Forms.Screen.FromHandle(new System.Windows.Interop.WindowInteropHelper(this).Handle);
+        var transform = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformFromDevice ?? Matrix.Identity;
+        var workArea = transform.Transform(new System.Windows.Vector(screen.WorkingArea.Width, screen.WorkingArea.Height));
+        MinWidth = Math.Min(MinWidth, workArea.X);
+        MinHeight = Math.Min(MinHeight, workArea.Y);
+        Width = Math.Min(Width, workArea.X);
+        Height = Math.Min(Height, workArea.Y);
+    }
 
     public void ShowMain()
     {
@@ -59,11 +71,15 @@ public partial class MainWindow : Window
 
     public void UpdateFromStatus(PipeResponse resp, bool keepNote = false)
     {
-        if (_last != null && resp.ServerNowUtc < _last.ServerNowUtc) return;
-        _last = resp;
-        _lastPollLocal = DateTime.Now;
-        _serviceOk = true;
+        if (_allowClose || !_state.Update(resp)) return;
         if (!keepNote) _lastNote = string.IsNullOrWhiteSpace(resp.ActionNote) ? _lastNote : resp.ActionNote;
+        RefreshCountdown();
+    }
+
+    public void MarkServiceUnavailable()
+    {
+        if (_allowClose) return;
+        _state.MarkUnavailable();
         RefreshCountdown();
     }
 
@@ -113,7 +129,8 @@ public partial class MainWindow : Window
     {
         double tomorrowBase = r.TomorrowBaseSeconds > 0
             ? r.TomorrowBaseSeconds
-            : Limits.DailyBaseFor(DateTime.Now.AddDays(1).DayOfWeek).TotalSeconds;
+            : Limits.DailyBaseFor(LogicalDay.TryParse(r.LogicalDay, out var day)
+                ? day.AddDays(1).DayOfWeek : DateTime.Now.AddDays(1).DayOfWeek).TotalSeconds;
         return Math.Max(0, tomorrowBase - r.BorrowCount * Limits.BorrowCost.TotalSeconds);
     }
 
@@ -141,11 +158,21 @@ public partial class MainWindow : Window
     private void RefreshBorrowButtons(PipeResponse r)
     {
         double eff = r.NextBorrowEffectiveness > 0 ? r.NextBorrowEffectiveness : Limits.NextBorrowEffectiveness(r.BorrowCount);
-        BorrowDayBtn.Content = $"Borrow 10m ({Limits.FormatEffectiveness(eff)})";
+        BorrowDayBtn.Content = $"Borrow 10m from tomorrow ({Limits.FormatEffectiveness(eff)})";
         BorrowDayBtn.Background = HeatBrush(eff, Limits.BorrowMinEffectiveness);
-        BorrowDotaBtn.Content = $"Borrow 10m ({Limits.FormatEffectiveness(r.NextDotaBorrowEffectiveness > 0 ? r.NextDotaBorrowEffectiveness : Limits.NextDotaBorrowEffectiveness(r.DotaBorrowCount))})";
+        TomorrowText.Text = $"Tomorrow: {Hm(TomorrowRemaining(r))}";
+        bool sunday = LogicalDay.TryParse(r.LogicalDay, out var day) && day.DayOfWeek == DayOfWeek.Sunday;
+        BorrowDayBtn.IsEnabled = !_busy && _state.IsCurrent && !sunday && TomorrowRemaining(r) >= Limits.BorrowCost.TotalSeconds;
+        BorrowDayBtn.ToolTip = sunday ? "Borrow is unavailable on Sundays."
+            : TomorrowRemaining(r) < Limits.BorrowCost.TotalSeconds ? "Tomorrow has less than 10m left to borrow."
+            : $"Spend 10m of tomorrow for +{Limits.FormatGain(Limits.BorrowGainForNumber(r.BorrowCount + 1))} today. Cooldowns still apply.";
         double deff = r.NextDotaBorrowEffectiveness > 0 ? r.NextDotaBorrowEffectiveness : Limits.NextDotaBorrowEffectiveness(r.DotaBorrowCount);
+        BorrowDotaBtn.Content = $"Borrow 10m from next week ({Limits.FormatEffectiveness(deff)})";
         BorrowDotaBtn.Background = HeatBrush(deff, Limits.DotaBorrowMinEffectiveness);
+        NextWeekText.Text = $"Next week: {Hm(NextWeekDotaRemaining(r))}";
+        BorrowDotaBtn.IsEnabled = !_busy && _state.IsCurrent && NextWeekDotaRemaining(r) >= Limits.BorrowCost.TotalSeconds;
+        BorrowDotaBtn.ToolTip = NextWeekDotaRemaining(r) < Limits.BorrowCost.TotalSeconds ? "Next week has less than 10m of Dota left to borrow."
+            : $"Spend 10m of next week's Dota budget for +{Limits.FormatGain(Limits.DotaBorrowGainForNumber(r.DotaBorrowCount + 1))} this week.";
     }
 
     private static System.Windows.Media.Brush HeatBrush(double eff, double floor)
@@ -160,54 +187,54 @@ public partial class MainWindow : Window
 
     private async Task SyncFromServiceAsync()
     {
+        if (_syncing || _allowClose) return;
+        _syncing = true;
         try
         {
             var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "status" });
-            if (resp == null || !resp.Ok) { _serviceOk = false; RefreshCountdown(); return; }
-            _serviceOk = true;
+            if (resp == null || !resp.Ok) { MarkServiceUnavailable(); return; }
             UpdateFromStatus(resp);
         }
-        catch { _serviceOk = false; RefreshCountdown(); }
+        finally { _syncing = false; }
     }
 
     private void RefreshCountdown()
     {
-        if (_last == null)
+        if (_allowClose) return;
+        ActionText.Text = _lastNote ?? "";
+        StatusText.Text = !_state.ServiceAvailable
+            ? "Service unreachable — is SteamTimer running? Values are last known."
+            : _state.Last == null ? "Waiting for the service…"
+            : !_state.IsCurrent ? "Service status is stale — values are last known."
+            : _state.Last.OutsidePlayHours ? $"Outside play hours — back {_state.Last.NextPlayAllowedLocal:HH:mm}"
+            : _state.Last.Enforcing || _state.Last.RemainingSeconds <= 0 ? "Daily budget used up — blocked until 03:00"
+            : _state.Last.InCooldown ? "Cooldown — Steam blocked between sessions"
+            : _state.Last.Running ? "Playing — timer running" : "Ready — Steam timer paused";
+        RecheckBtn.IsEnabled = ForceBtn.IsEnabled = ResetBtn.IsEnabled = !_busy;
+        if (_state.Last == null)
         {
             RemH.Text = "–"; RemM.Text = "–"; RemS.Text = "–";
             _todFrac = 0; _sessFrac = 0; _dayFrac = 0; _dotaFrac = 0;
             ApplyFills();
             DetectorText.Text = "Detector: —";
-            ActionText.Text = _serviceOk ? "Waiting for the service…" : "Service unreachable — is SteamTimer running?";
+            BorrowDayBtn.IsEnabled = BorrowDotaBtn.IsEnabled = false;
             return;
         }
-        var r = _last;
+        var r = _state.Last;
         RefreshBorrowButtons(r);
 
-        double elapsed = Math.Max(0, (DateTime.Now - _lastPollLocal).TotalSeconds);
-        double estimate = Math.Min(elapsed, 30);
-        bool accruing = r.Running && !r.InCooldown && !r.OutsidePlayHours && !r.Enforcing;
-        double remaining = r.RemainingSeconds;
-        if (accruing && remaining > 0) remaining = Math.Max(0, remaining - estimate);
-        double sessElapsed = r.SessionElapsedSeconds + (accruing ? estimate : 0);
-        double dotaRem = r.DotaRemainingSeconds;
-        if (accruing && r.DotaRunning && !r.DotaEnforcing && dotaRem > 0) dotaRem = Math.Max(0, dotaRem - estimate);
-
-        double sessionMax = r.SessionMaxSeconds > 0 ? r.SessionMaxSeconds : Limits.SessionMax.TotalSeconds;
-        double dailyMax = r.BudgetSeconds > 0 ? r.BudgetSeconds : 1;
-        double dotaMax = r.DotaBudgetSeconds > 0 ? r.DotaBudgetSeconds : Limits.DotaWeeklyBudget.TotalSeconds;
+        double elapsed = _state.ElapsedSeconds;
+        var values = _state.Project(DateTime.Now);
+        double remaining = values.Remaining, sessElapsed = values.SessionElapsed, dotaRem = values.DotaRemaining;
+        double sessionMax = values.SessionMax;
+        double dailyMax = Math.Max(0, r.BudgetSeconds);
+        double dotaMax = Math.Max(0, r.DotaBudgetSeconds);
 
         // ---- Remaining: most restrictive ----
-        double windowLeft = r.WindowEndsLocal != null ? Math.Max(0, (r.WindowEndsLocal.Value - DateTime.Now).TotalSeconds) : double.PositiveInfinity;
-        double sessionLeft = Math.Max(0, sessionMax - sessElapsed);
-        double mostLeft = r.Enforcing ? 0 : Math.Min(Math.Min(sessionLeft, remaining), windowLeft);
-        if (!r.Running && !r.InCooldown) mostLeft = Math.Min(remaining, double.IsPositiveInfinity(windowLeft) ? remaining : windowLeft);
-        if (r.InCooldown || r.OutsidePlayHours) mostLeft = 0;
-        if (double.IsPositiveInfinity(mostLeft) || double.IsNaN(mostLeft)) mostLeft = 0;
-        int totalSec = (int)Math.Ceiling(mostLeft);
-        RemH.Text = (totalSec / 3600).ToString("00");
-        RemM.Text = ((totalSec % 3600) / 60).ToString("00");
-        RemS.Text = (totalSec % 60).ToString("00");
+        int totalSec = (int)Math.Ceiling(values.Playable);
+        RemH.Text = _state.IsCurrent ? (totalSec / 3600).ToString("00") : "–";
+        RemM.Text = _state.IsCurrent ? ((totalSec % 3600) / 60).ToString("00") : "–";
+        RemS.Text = _state.IsCurrent ? (totalSec % 60).ToString("00") : "–";
 
         // ---- Time of day: fills as window elapses ----
         var now = DateTime.Now;
@@ -255,7 +282,7 @@ public partial class MainWindow : Window
         }
         else if (cooling)
         {
-            double cd = Math.Max(0, r.CooldownRemainingSeconds - elapsed);
+            double cd = values.CooldownRemaining;
             double total = r.CooldownTotalSeconds > 0 ? r.CooldownTotalSeconds : Limits.CooldownForSession(TimeSpan.FromSeconds(r.LastSessionSeconds)).TotalSeconds;
             if (total <= 0) total = Math.Max(cd, 1);
             SessFill.Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xD9, 0x2F, 0x20));
@@ -285,13 +312,13 @@ public partial class MainWindow : Window
 
         // ---- Dota allowance: depletes ----
         _dotaFrac = dotaMax > 0 ? (r.DotaForbidden ? 0 : dotaRem) / dotaMax : 0;
-        DotaMid.Text = r.DotaForbidden ? "forbidden" : Hm(dotaRem);
+        DotaMid.Text = r.DotaForbidden ? "forbidden" : r.DotaEnforcing && r.WorkoutGatesToday && r.WorkoutDotaEarnedSeconds <= 0
+            ? "needs workout" : Hm(dotaRem);
         DotaMax.Text = FmtMax(dotaMax);
 
         ApplyFills();
 
-        DetectorText.Text = r.SteamRunning ? "Detector: Steam detected" : "Detector: nothing detected";
-        ActionText.Text = _lastNote ?? "";
+        DetectorText.Text = r.SteamRunning ? "Detector: play detected" : "Detector: nothing detected";
 
         string hoursLine = r.OutsidePlayHours
             ? $"\nPlay hours {Limits.PlayHoursSummary} (weekends free).\nBlocked until {r.NextPlayAllowedLocal:HH:mm}."
@@ -307,84 +334,91 @@ public partial class MainWindow : Window
                 : $"Base {Hm(r.DotaBaseBudgetSeconds > 0 ? r.DotaBaseBudgetSeconds : Limits.DotaWeeklyBudget.TotalSeconds)} (weekends free)") +
             (r.DotaBorrowedSeconds > 0 ? $" + borrow {Hm(r.DotaBorrowedSeconds)}" : "") +
             (r.DotaAdvanceDeductionSeconds > 0 ? $" − advance {Hm(r.DotaAdvanceDeductionSeconds)}" : "") +
-            $"\nUsed {Hm(r.DotaUsedSeconds)}, left {Hm(dotaRem)}" + hoursLine;
+            $"\nUsed {Hm(r.DotaUsedSeconds)}, left {Hm(dotaRem)}" +
+            (r.DotaForbidden ? "\nNo Dota on Mon / Wed / Fri." : "") + hoursLine;
         DetectorDetail.Text = "Sees now: " + DescribeSeen(r) + ".\n" +
             (r.RememberedGames.Count > 0 ? "Remembered: " + string.Join(", ", r.RememberedGames) + "." : "Remembered: none.") +
             $"\nLast poll {Math.Max(0, (int)elapsed)}s ago.";
 
-        _tray?.SetStateFromWindow(r, remaining, elapsed);
+        if (_state.IsCurrent) _tray?.SetStateFromWindow(r, remaining, elapsed);
+        else _tray?.SetState(_state.ServiceAvailable ? "Service status is stale — last known values" : "Service unreachable — is SteamTimer running?", null);
     }
 
     private async void Recheck_Click(object sender, RoutedEventArgs e)
     {
         if (_busy) return;
-        _busy = true; RecheckBtn.IsEnabled = false;
+        _busy = true; RefreshCountdown();
         try
         {
             var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "recheck" });
-            if (resp == null || !resp.Ok) { _serviceOk = false; _lastNote = "Recheck failed — service unreachable."; RefreshCountdown(); return; }
-            _serviceOk = true; _lastNote = resp.ActionNote;
+            if (resp == null || !resp.Ok) { _lastNote = "Recheck failed — service unreachable."; MarkServiceUnavailable(); return; }
+            _lastNote = resp.ActionNote;
             UpdateFromStatus(resp, keepNote: true);
         }
-        finally { _busy = false; RecheckBtn.IsEnabled = true; }
+        finally { _busy = false; RefreshCountdown(); }
     }
 
     private async void Force_Click(object sender, RoutedEventArgs e)
     {
         if (_busy) return;
-        string what = _last != null && (_last.LiveClients.Count > 0 || _last.LiveGames.Count > 0 || _last.MatchedOrphans.Count > 0)
-            ? $"The service currently sees: {DescribeSeen(_last)}.\n\n" : "";
-        if (System.Windows.MessageBox.Show($"{what}Force-close Steam + detected games now? This stops the timer immediately (the normal cooldown for the time played still applies).",
+        var last = _state.Last;
+        string what = last != null && (last.LiveClients.Count > 0 || last.LiveGames.Count > 0 || last.MatchedOrphans.Count > 0)
+            ? $"The service currently sees: {DescribeSeen(last)}.\n\n" : "";
+        if (System.Windows.MessageBox.Show(this, $"{what}Force-close Steam + detected games now? This stops the timer immediately (the normal cooldown for the time played still applies).",
             "Steam Timer — force close", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
-        _busy = true; ForceBtn.IsEnabled = false;
+        _busy = true; RefreshCountdown();
         try
         {
             var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "kill" }, timeoutMs: 15000);
-            if (resp == null || !resp.Ok) { _serviceOk = false; _lastNote = "Force-close failed — service unreachable."; RefreshCountdown(); return; }
-            _serviceOk = true; _lastNote = resp.ActionNote;
+            if (resp == null || !resp.Ok) { _lastNote = "Force-close failed — service unreachable."; MarkServiceUnavailable(); return; }
+            _lastNote = resp.ActionNote;
             UpdateFromStatus(resp, keepNote: true);
         }
-        finally { _busy = false; ForceBtn.IsEnabled = true; }
+        finally { _busy = false; RefreshCountdown(); }
     }
 
     private async void BorrowDay_Click(object sender, RoutedEventArgs e)
     {
         if (_busy) return;
-        if (_last != null && LogicalDay.TryParse(_last.LogicalDay, out var ld) && ld.DayOfWeek == DayOfWeek.Sunday)
+        if (_state.Last is { } last && LogicalDay.TryParse(last.LogicalDay, out var ld) && ld.DayOfWeek == DayOfWeek.Sunday)
         {
             System.Windows.MessageBox.Show("Borrow is unavailable on Sundays — enjoy the 4h budget.", "Steam Timer — borrow", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
-        _busy = true; BorrowDayBtn.IsEnabled = false;
+        _busy = true; RefreshCountdown();
         try
         {
             var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "borrow" }, timeoutMs: 15000);
-            if (resp == null) { _serviceOk = false; _lastNote = "Borrow failed — service unreachable."; RefreshCountdown(); return; }
-            if (!resp.Ok) { _lastNote = resp.Error; UpdateFromStatus(resp); _lastNote = resp.Error; RefreshCountdown(); return; }
-            _serviceOk = true; _lastNote = null;
+            if (resp == null) { _lastNote = "Borrow failed — service unreachable."; MarkServiceUnavailable(); return; }
+            if (!resp.Ok) { _lastNote = resp.Error; UpdateFromStatus(resp, keepNote: true); return; }
+            _lastNote = null;
             UpdateFromStatus(resp);
         }
-        finally { _busy = false; BorrowDayBtn.IsEnabled = true; }
+        finally { _busy = false; RefreshCountdown(); }
     }
 
     private async void BorrowDota_Click(object sender, RoutedEventArgs e)
     {
         if (_busy) return;
-        _busy = true; BorrowDotaBtn.IsEnabled = false;
+        _busy = true; RefreshCountdown();
         try
         {
             var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "borrowdota" }, timeoutMs: 15000);
-            if (resp == null) { _serviceOk = false; _lastNote = "Dota borrow failed — service unreachable."; RefreshCountdown(); return; }
-            if (!resp.Ok) { _lastNote = resp.Error; UpdateFromStatus(resp); _lastNote = resp.Error; RefreshCountdown(); return; }
-            _serviceOk = true; _lastNote = null;
+            if (resp == null) { _lastNote = "Dota borrow failed — service unreachable."; MarkServiceUnavailable(); return; }
+            if (!resp.Ok) { _lastNote = resp.Error; UpdateFromStatus(resp, keepNote: true); return; }
+            _lastNote = null;
             UpdateFromStatus(resp);
         }
-        finally { _busy = false; BorrowDotaBtn.IsEnabled = true; }
+        finally { _busy = false; RefreshCountdown(); }
     }
 
     private async void Reset_Click(object sender, RoutedEventArgs e)
     {
+        if (_busy) return;
+        _busy = true;
         _lastNote = "";
-        await SyncFromServiceAsync();
+        RefreshCountdown();
+        try { await SyncFromServiceAsync(); }
+        finally { _busy = false; RefreshCountdown(); }
     }
 }
