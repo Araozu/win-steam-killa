@@ -2,7 +2,7 @@ namespace Shared;
 
 public class TimerState
 {
-    public int Version { get; set; } = 6;
+    public int Version { get; set; } = 7;
     // Logical day "yyyy-MM-dd" (03:00 local -> 03:00 local). Base budget derives
     // from its weekday; effective budget includes carry-in and borrowing.
     public string LogicalDay { get; set; } = "";
@@ -47,6 +47,13 @@ public class TimerState
     public int DotaBorrowedSeconds { get; set; }
     public int DotaBorrowCount { get; set; }
     public int DotaAdvanceDeductionSeconds { get; set; }
+    // --- workout-gated Dota (v7): weekly Dota time must be earned via verified
+    // physical activity (Strava workout credit served by WorkoutService).
+    // No free weekday grant: Mon–Fri playable Dota = min(8h cap, earned)
+    // + borrows - deductions; Sat/Sun keep the free 8h grant.
+    // Fail-closed: fresh/offline/unconfigured state has 0 earned => weekday Dota blocked.
+    public int WorkoutDotaEarnedSeconds { get; set; }
+    public DateTime WorkoutLastSyncUtc { get; set; }
     // Once-per-day flag: forbidden-day "no Dota" notification already sent.
     // Resets on day rollover (fresh state each logical day).
     public bool DotaForbiddenNotified { get; set; }
@@ -128,11 +135,16 @@ public class PipeResponse
     public bool DotaRunning { get; set; }
     public bool DotaEnforcing { get; set; }
     public DateTime DotaResetsLocal { get; set; }
-    // --- Dota borrow/advance (effective = base 8h + borrowed - deduction) ---
+    // --- Dota borrow/advance (effective = min(8h cap, earned) + borrowed - deduction) ---
     public int DotaBaseBudgetSeconds { get; set; }
     public int DotaBorrowedSeconds { get; set; }
     public int DotaBorrowCount { get; set; }
     public int DotaAdvanceDeductionSeconds { get; set; }
+    // --- workout-gated Dota (v7): verified earned credit for this week + last sync.
+    public int WorkoutDotaEarnedSeconds { get; set; }
+    public DateTime WorkoutLastSyncUtc { get; set; }
+    // True when today's Dota is workout-gated (weekdays); weekends keep the free grant.
+    public bool WorkoutGatesToday { get; set; }
     // Next press: effectiveness (0.95 first, then -0.07, -0.08, ..., 0.5 floor) + gain seconds.
     public double NextDotaBorrowEffectiveness { get; set; }
     public int NextDotaBorrowGainSeconds { get; set; }

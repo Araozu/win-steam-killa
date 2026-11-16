@@ -20,9 +20,14 @@ After the budget is used, kills Steam + games and keeps enforcing until 03:00.
   (or the 2h max / budget hits).
 - **Cooldown:** after *every* session, Steam is blocked for that session's
   length **rounded up to 5 minutes** (e.g. 1h12m played → 1h15m cooldown).
-- **Dota 2:** **8h weekly** budget, resets **Monday 03:00**. Dota time burns
-  both budgets, but a Dota-only lockout kills just Dota — Steam and other
-  games continue on the daily budget. **Forbidden on Mon / Wed / Fri** — Dota is
+- **Dota 2:** **workout-gated on weekdays, up to 8h weekly**, resets
+  **Monday 03:00**. On Mon–Fri, Dota time must be earned with verified
+  physical activity (Strava workouts via WorkoutService, 4x credit, capped
+  at 8h/week). **No workout credit = no Dota on weekdays** (fail-closed,
+  including when offline or unconfigured). **Sat/Sun keep the old free
+  grant** (up to 8h/week, no workout needed). Dota time burns both budgets,
+  but a Dota-only lockout kills just Dota — Steam and other games continue
+  on the daily budget. **Forbidden on Mon / Wed / Fri** — Dota is
   closed/blocked all those days (03:00–03:00), burns no weekly budget.
 - **Play hours:** Mon–Fri Steam may only run **05:30–06:15** and **20:15–22:00**
   (local wall-clock). Outside those windows Steam + games are closed/blocked
@@ -46,12 +51,15 @@ After the budget is used, kills Steam + games and keeps enforcing until 03:00.
 
 - `Service/` — Windows Service as LocalSystem. Owns state
   (`C:\ProgramData\SteamTimer\state.json`), 15s tick, 15m warning, deadline kill,
-  60s enforce loop until 03:00. Named pipe `steamtimer` (`status`; the old
-  manual `start` now just answers "tracking is automatic").
+  60s enforce loop until 03:00. Syncs verified workout credit from WorkoutService
+  every 15 minutes (plus on boot); weekday Dota stays blocked until a sync reports
+  earnings (weekends use the free grant). Named pipe `steamtimer` (`status`; the old manual `start` now just
+  answers "tracking is automatic"). Configure with `Workout:BaseUrl` +
+  `Workout:ApiToken` (or `WORKOUT_BASE_URL` / `WORKOUT_API_TOKEN` env).
 - `App/` — WinForms info window + quiet tray (`NotifyIcon` tooltip = countdown,
   balloons only for warnings/kill/cooldown/Dota).
 - `Shared/` — `Limits` (2h session max, len-based cooldown, 30m carryover,
-  8h Dota week), `LogicalDay` (03:00 reset), pipe DTOs.
+  workout-gated Dota up to 8h/week), `LogicalDay` (03:00 reset), pipe DTOs.
 
 ## Dev
 
@@ -70,8 +78,11 @@ and exercise the workout HTTP endpoints with a fake Strava server. CI runs
 builds, tests, and setup-script checks on Linux and Windows. See `REVIEW.md` for
 fixes and remaining Windows runtime checks.
 
-`WorkoutService/` is a separate Strava-backed HTTP API. The Windows limiter
-currently does **not** fetch or apply its workout credits.
+`WorkoutService/` is a Strava-backed HTTP API. The Windows service fetches its
+per-day credit (`GET /api/credit?day=`) and sums the current week's days into
+the playable weekday Dota budget (capped at 8h; weekends use the free grant).
+Failed syncs keep the cached value; fresh installs stay at zero until the
+first successful sync.
 
 ## Notes / limits
 

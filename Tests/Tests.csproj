@@ -16,6 +16,7 @@
     <!-- Exercise the production engine on Linux without starting Windows services. -->
     <Compile Include="../Service/TimerEngine.cs" Link="Service/TimerEngine.cs" />
     <Compile Include="../Service/StateStore.cs" Link="Service/StateStore.cs" />
+    <Compile Include="../Service/WorkoutCreditSource.cs" Link="Service/WorkoutCreditSource.cs" />
     <Compile Include="../Service/Killer.cs" Link="Service/Killer.cs" />
     <Compile Include="../Service/PlayProcesses.cs" Link="Service/PlayProcesses.cs" />
     <Using Include="Microsoft.Extensions.Logging" />

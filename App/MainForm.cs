@@ -736,7 +736,9 @@ public class MainForm : Form
         _dailyBar.Invalidate();
         SetMaxLabel(_dailyMax, Hm(dailyMax));
 
-        _dotaTitle.Text = r.DotaForbidden ? "Dota 2 — forbidden Mon / Wed / Fri" : r.DotaRunning ? "Dota 2 - running" : "Dota 2";
+        _dotaTitle.Text = r.DotaForbidden ? "Dota 2 — forbidden Mon / Wed / Fri"
+            : r.WorkoutGatesToday && r.WorkoutDotaEarnedSeconds <= 0 && !r.DotaRunning ? "Dota 2 — needs workout"
+            : r.DotaRunning ? "Dota 2 - running" : "Dota 2";
         _dotaBar.MaximumSeconds = dotaMax;
         _dotaBar.RemainingSeconds = r.DotaForbidden ? 0 : dotaRem;
         _dotaBar.DisplayText = dotaText;
@@ -802,10 +804,13 @@ public class MainForm : Form
             (r.BorrowedSeconds > 0 ? $" + borrow {Hm(r.BorrowedSeconds)}" : "") +
             (r.AdvanceDeductionSeconds > 0 ? $" − advance {Hm(r.AdvanceDeductionSeconds)}" : "") +
             $"\nUsed {Hm(r.UsedSeconds)}, left {Hm(remaining)}" +
-            $"\n\nDota {Hm(dotaMax)} total\nBase {Hm(r.DotaBaseBudgetSeconds > 0 ? r.DotaBaseBudgetSeconds : Limits.DotaWeeklyBudget.TotalSeconds)}" +
+            $"\n\nDota {Hm(dotaMax)} total\n" + (r.WorkoutGatesToday
+                ? $"Earned {Hm(r.WorkoutDotaEarnedSeconds)} via workout (8h cap)"
+                : $"Base {Hm(r.DotaBaseBudgetSeconds > 0 ? r.DotaBaseBudgetSeconds : Limits.DotaWeeklyBudget.TotalSeconds)} (weekends free)") +
             (r.DotaBorrowedSeconds > 0 ? $" + borrow {Hm(r.DotaBorrowedSeconds)}" : "") +
             (r.DotaAdvanceDeductionSeconds > 0 ? $" − advance {Hm(r.DotaAdvanceDeductionSeconds)}" : "") +
             $"\nUsed {Hm(r.DotaUsedSeconds)}, left {Hm(dotaRem)}" +
+            (r.WorkoutGatesToday && r.WorkoutDotaEarnedSeconds <= 0 && !r.DotaForbidden ? "\nNo workout credit — Dota blocked until a workout syncs." : "") +
             (r.DotaForbidden ? "\nNo Dota on Mon / Wed / Fri." : "") + hoursLine;
 
         _detectorLabel.Text = r.SteamRunning ? "Detector: Steam detected" : "Detector: nothing detected";

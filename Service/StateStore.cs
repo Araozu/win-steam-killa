@@ -28,7 +28,7 @@ public class StateStore
                 try
                 {
                     var state = JsonSerializer.Deserialize<TimerState>(File.ReadAllText(path));
-                    if (state != null && state.Version != 6) return state; // Engine owns policy migrations.
+                    if (state != null && state.Version != 7) return state; // Engine owns policy migrations.
                     if (state != null && LogicalDay.TryParse(state.LogicalDay, out _)
                         && state.SeenGames != null && state.GameHistory != null
                         && double.IsFinite(state.UsedSeconds) && state.UsedSeconds >= 0

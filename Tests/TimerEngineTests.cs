@@ -100,6 +100,38 @@ public sealed class TimerEngineTests : IDisposable
     }
 
     [Fact]
+    public void FractionalRemainderStillTriggersSessionLimit()
+    {
+        // Live 2026-11-15: real tick jitter accrues 15.0xx s, so a 2h session
+        // lands on 7199.999999999997 and `>= 7200` never fires — no kill, no
+        // cooldown, counter frozen just below the limit. The engine must treat
+        // a sub-millisecond remainder as reached.
+        Seed(used: 7199.999999999997, session: 7199.999999999997, running: true);
+        _processes.Playing = true;
+        var engine = Engine();
+        Tick(engine);
+        var status = Status(engine);
+        Assert.False(status.Running);
+        Assert.True(status.InCooldown);
+        Assert.Equal(1, _processes.PlayKills);
+    }
+
+    [Fact]
+    public void FractionalRemainderStillTriggersDailyLimit()
+    {
+        // Same floating-point stall for the daily budget: Used just below the
+        // effective budget must still enforce + kill + stop the session.
+        var state = Seed(used: 8999.999999999997, session: 590, running: true);
+        _processes.Playing = true;
+        var engine = Engine();
+        Tick(engine);
+        var status = Status(engine);
+        Assert.True(status.Enforcing);
+        Assert.False(status.Running);
+        Assert.Equal(1, _processes.PlayKills);
+    }
+
+    [Fact]
     public void DotaExhaustionKillsOnlyDota()
     {
         var state = Seed(running: true);

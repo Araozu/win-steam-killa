@@ -1,8 +1,9 @@
 # Code review and fixes
 
 Reviewed all tracked application, service, shared-policy, workout API, setup,
-deployment, and demo sources. Existing policy values and state version 6 are
-preserved.
+deployment, and demo sources. Existing policy values and state version 7 are
+preserved (v7: weekday workout-gated Dota, weekends on the free grant, full
+state wipe on deploy).
 
 ## Fixed defects
 
@@ -88,6 +89,9 @@ runs the build, regression suite, and setup-script check on Linux and Windows.
 - Real Strava consent, token rotation, pagination/rate limits, persistent container
   volumes, and Traefik routing require a configured deployment/account.
 
-WorkoutService remains a separate API. The Windows service has no HTTP client or
-policy to consume its credit; adding that integration would be a separate feature.
-The demo is a standalone UI mockup and does not communicate with the service.
+WorkoutService remains a separate API. The Windows service now consumes its
+credit over HTTP (15-minute sync plus on boot, Bearer token, per-day sums
+capped at the 8h weekly Dota cap) for weekday Dota; weekends use the free
+grant. Failed syncs keep the cached value and fresh state is fail-closed at
+zero. The demo is a standalone UI mockup and does not communicate with the
+service.

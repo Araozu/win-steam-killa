@@ -1,10 +1,10 @@
 # Current review notes
 
-See `REVIEW.md` for the current implementation and verification. The notes below
-are historical; in particular, Dota is now 8h/week, state is v6, and the complete
-solution includes the .NET 11 WorkoutService and cross-platform regression tests.
-The Windows app does not yet consume workout credits. No state version bump was
-made during the review.
+See `REVIEW.md` for the current implementation and verification, and `RESETS.md`
+for the wipe history. The notes below are historical; state is v7
+(weekday workout-gated Dota: Mon–Fri playable Dota = min(8h cap, earned)
++ borrows − deductions, fail-closed at 0; Sat/Sun keep the free 8h grant).
+The Windows app consumes workout credits via the service's 15-minute sync.
 
 ---
 
@@ -145,8 +145,10 @@ Self-control grade (user keeps Admin): friction, not fortress.
   reset in README, never add a `reset` pipe command. Non-elevated shell
   cannot wipe ProgramData directly, so reset = `Version` bump, effective on
   next `Setup/install.ps1` (Admin) restart.
-  Celebration reset done: v5 -> v6 with the Mon–Fri 05:45–06:15 + 20:30–22:00
+  Celebration reset done: v5 -> v6 with the Mon-Fri 05:45-06:15 + 20:30-22:00
   play windows (strict tightening), full wipe on next deploy.
+  Workout-gated Dota reset done: v6 -> v7, no free weekday Dota grant (strict
+  tightening), full wipe on next deploy. Full history lives in `RESETS.md`.
 - Open items / ideas: toast via `Microsoft.Toolkit.Uwp.Notifications` instead
   of balloon tips; IFEO/firewall hard-block as optional paranoid mode;
   resolving `GameHistory` exe names to real Steam titles (AppID lookup);
