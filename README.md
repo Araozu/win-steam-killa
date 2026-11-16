@@ -21,10 +21,11 @@ After the budget is used, kills Steam + games and keeps enforcing until 03:00.
 - **Cooldown:** after *every* session, Steam is blocked for that session's
   length **rounded up to 5 minutes** (e.g. 1h12m played → 1h15m cooldown).
 - **Dota 2:** **workout-gated on weekdays, up to 8h weekly**, resets
-  **Monday 03:00**. On Mon–Fri, Dota time must be earned with verified
-  physical activity (Strava workouts via WorkoutService, 4x credit, capped
-  at 8h/week). **No workout credit = no Dota on weekdays** (fail-closed,
-  including when offline or unconfigured). **Sat/Sun keep the old free
+  **Monday 03:00**. On Mon–Fri, the base allowance comes from cached workout
+  credit (up to 8h/week); existing Dota borrowing adds to that allowance.
+  **The replacement Notify → Tasker pipeline is capture-only for now** and
+  grants no new credit while we wait for hardware samples. Fresh state starts
+  with zero workout credit. **Sat/Sun keep the old free
   grant** (up to 8h/week, no workout needed). Dota time burns both budgets,
   but a Dota-only lockout kills just Dota — Steam and other games continue
   on the daily budget. **Forbidden on Mon / Wed / Fri** — Dota is
@@ -51,11 +52,14 @@ After the budget is used, kills Steam + games and keeps enforcing until 03:00.
 
 - `Service/` — Windows Service as LocalSystem. Owns state
   (`C:\ProgramData\SteamTimer\state.json`), 15s tick, 15m warning, deadline kill,
-  60s enforce loop until 03:00. Syncs verified workout credit from WorkoutService
-  every 15 minutes (plus on boot); weekday Dota stays blocked until a sync reports
-  earnings (weekends use the free grant). Named pipe `steamtimer` (`status`; the old manual `start` now just
+  60s enforce loop until 03:00. A separate worker polls the credit API every
+  15 minutes (plus on boot), so network delays cannot pause enforcement. The
+  capture-only API returns 503, preserving cached credit until a real mapping
+  exists. Named pipe `steamtimer` (`status`; the old manual `start` now just
   answers "tracking is automatic"). Configure with `Workout:BaseUrl` +
-  `Workout:ApiToken` (or `WORKOUT_BASE_URL` / `WORKOUT_API_TOKEN` env).
+  `Workout:ApiToken` (or `WORKOUT_BASE_URL` / `WORKOUT_API_TOKEN` env visible to
+  the service). Settings are loaded beside the service executable; nonblank
+  structured settings take precedence over these aliases.
 - `App/` — WinForms info window + quiet tray (`NotifyIcon` tooltip = countdown,
   balloons only for warnings/kill/cooldown/Dota).
 - `Shared/` — `Limits` (2h session max, len-based cooldown, 30m carryover,
@@ -74,15 +78,17 @@ pwsh -NoProfile -File Tests/VerifySetup.ps1
 ```
 
 The tests run the production timer engine with a simulated clock/process list,
-and exercise the workout HTTP endpoints with a fake Strava server. CI runs
+and exercise raw capture, authorization, credit-client failures and caching. CI runs
 builds, tests, and setup-script checks on Linux and Windows. See `REVIEW.md` for
 fixes and remaining Windows runtime checks.
 
-`WorkoutService/` is a Strava-backed HTTP API. The Windows service fetches its
-per-day credit (`GET /api/credit?day=`) and sums the current week's days into
-the playable weekday Dota budget (capped at 8h; weekends use the free grant).
-Failed syncs keep the cached value; fresh installs stay at zero until the
-first successful sync.
+`WorkoutService/` is now a toy HTTP capture server for **Notify for Xiaomi →
+Tasker**. Strava has been removed. `POST /api/capture` saves raw data to files
+for later analysis; workout fields and credit conversion are intentionally
+pending real samples. Follow [WORKOUT_PIPELINE.md](WORKOUT_PIPELINE.md) to run
+the receiver, configure a Tasker probe, and collect the hardware test cases.
+The Windows credit client remains ready for a future daily credit API. Failed,
+unconfigured, and timed-out syncs preserve cached credit; fresh state starts at zero.
 
 ## Notes / limits
 

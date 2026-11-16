@@ -125,12 +125,93 @@ public sealed class WorkoutGatingTests : IDisposable
         Assert.Equal(0, Status(engine).WorkoutDotaEarnedSeconds);
     }
 
+    [Fact]
+    public async Task TimeoutKeepsCreditAndShutdownCancellationPropagates()
+    {
+        SetTuesdayEvening();
+        var engine = Engine();
+        var week = Status(engine).DotaWeekStart;
+        engine.ApplyWorkoutEarned(week, 1800, _now);
+        _workout.Timeout = true;
+        Assert.False(await engine.RefreshWorkoutCreditsAsync());
+        Assert.Equal(1800, Status(engine).WorkoutDotaEarnedSeconds);
+        using var shutdown = new CancellationTokenSource();
+        shutdown.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => engine.RefreshWorkoutCreditsAsync(shutdown.Token));
+    }
+
+    [Fact]
+    public async Task UnconfiguredSourceDoesNotEraseCachedCreditOrClaimSuccessfulSync()
+    {
+        var engine = new TimerEngine(NullLogger<TimerEngine>.Instance, _store, () => _now, _processes,
+            new NullWorkoutCreditSource());
+        engine.ApplyWorkoutEarned(Status(engine).DotaWeekStart, 1800, _now);
+        var lastSync = Status(engine).WorkoutLastSyncUtc;
+        _now = _now.AddMinutes(1);
+        Assert.False(await engine.RefreshWorkoutCreditsAsync());
+        Assert.Equal(1800, Status(engine).WorkoutDotaEarnedSeconds);
+        Assert.Equal(lastSync, Status(engine).WorkoutLastSyncUtc);
+    }
+
+    [Fact]
+    public void ReducedCreditNeverRefundsAlreadyPlayedDotaTime()
+    {
+        SetTuesdayEvening();
+        var engine = Engine();
+        var week = Status(engine).DotaWeekStart;
+        engine.ApplyWorkoutEarned(week, 120, _now);
+        _processes.Playing = _processes.Dota = true;
+        Tick(engine); // Open session.
+        for (int i = 0; i < 4; i++) Tick(engine);
+        Assert.Equal(60, Status(engine).DotaUsedSeconds);
+        engine.ApplyWorkoutEarned(week, 30, _now); // Corrected workout below usage.
+        Tick(engine);
+        Assert.Equal(60, Status(engine).DotaUsedSeconds);
+        Assert.True(Status(engine).DotaEnforcing);
+        Assert.Equal(1, _processes.DotaKills);
+        engine.ApplyWorkoutEarned(week, 120, _now);
+        Assert.Equal(60, Status(engine).DotaRemainingSeconds);
+    }
+
+    [Fact]
+    public async Task PendingNetworkSyncDoesNotBlockEnforcementAndCancelsOnShutdown()
+    {
+        SetTuesdayEvening();
+        _workout.Pending = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var engine = Engine();
+        using var worker = new WorkoutSyncWorker(engine, NullLogger<WorkoutSyncWorker>.Instance);
+        await worker.StartAsync(CancellationToken.None);
+        try
+        {
+            await _workout.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            _processes.Playing = _processes.Dota = true;
+            Tick(engine);
+            Assert.Equal(1, _processes.DotaKills);
+            Assert.True(Status(engine).Running);
+            Tick(engine);
+            Assert.Equal(15, Status(engine).UsedSeconds);
+        }
+        finally
+        {
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await worker.StopAsync(deadline.Token);
+            Assert.True(worker.ExecuteTask!.IsCompleted);
+        }
+    }
+
     private sealed class FakeWorkout : IWorkoutCreditSource
     {
         public int Earned;
         public bool Throw;
+        public bool Timeout;
+        public TaskCompletionSource<int>? Pending;
+        public TaskCompletionSource Started = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task<int> GetWeeklyEarnedSecondsAsync(string weekStart, string today, CancellationToken ct)
         {
+            ct.ThrowIfCancellationRequested();
+            Started.TrySetResult();
+            if (Pending is not null) return Pending.Task.WaitAsync(ct);
+            if (Timeout) throw new TaskCanceledException("HTTP request timed out");
             if (Throw) throw new HttpRequestException("upstream down");
             return Task.FromResult(Earned);
         }

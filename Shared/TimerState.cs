@@ -47,8 +47,8 @@ public class TimerState
     public int DotaBorrowedSeconds { get; set; }
     public int DotaBorrowCount { get; set; }
     public int DotaAdvanceDeductionSeconds { get; set; }
-    // --- workout-gated Dota (v7): weekly Dota time must be earned via verified
-    // physical activity (Strava workout credit served by WorkoutService).
+    // --- workout-gated Dota (v7): cached weekly workout credit.
+    // Replacement Notify/Tasker credit mapping awaits hardware samples.
     // No free weekday grant: Mon–Fri playable Dota = min(8h cap, earned)
     // + borrows - deductions; Sat/Sun keep the free 8h grant.
     // Fail-closed: fresh/offline/unconfigured state has 0 earned => weekday Dota blocked.
@@ -140,7 +140,7 @@ public class PipeResponse
     public int DotaBorrowedSeconds { get; set; }
     public int DotaBorrowCount { get; set; }
     public int DotaAdvanceDeductionSeconds { get; set; }
-    // --- workout-gated Dota (v7): verified earned credit for this week + last sync.
+    // --- workout-gated Dota (v7): cached earned credit for this week + last sync.
     public int WorkoutDotaEarnedSeconds { get; set; }
     public DateTime WorkoutLastSyncUtc { get; set; }
     // True when today's Dota is workout-gated (weekdays); weekends keep the free grant.

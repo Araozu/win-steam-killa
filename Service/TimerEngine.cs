@@ -14,8 +14,8 @@ namespace Service;
 // blocks Steam equal to that session's length rounded up to 5 minutes.
 // Budget exhaustion kills + enforces until 03:00. Everything survives reboot.
 // Dota 2 on weekdays burns a workout-earned weekly budget (v7, Mon 03:00 reset):
-// weekday Dota time must be earned via verified physical activity (WorkoutService
-// Strava credit, 4x, capped at 8h/week). No free weekday grant: Mon–Fri playable
+// weekday Dota time comes from cached workout credit (future Notify/Tasker
+// mapping; current server captures samples only). Mon–Fri playable
 // Dota = min(8h cap, earned this week) + borrows - deductions, fail-closed at 0.
 // Sat/Sun keep the old free 8h grant. When the earned Dota budget is out only Dota is killed, Steam + other games
 // continue. Dota is entirely forbidden on Mon / Wed / Fri (logical day): only
@@ -92,7 +92,7 @@ public class TimerEngine
         WorkoutGrantedFor(todayLogicalDay, st.WorkoutDotaEarnedSeconds)
         + st.DotaBorrowedSeconds - st.DotaAdvanceDeductionSeconds);
 
-    // Weekdays: Dota must be earned (min(8h cap, verified weekly earnings)).
+    // Weekdays: Dota must be earned (min(8h cap, cached weekly earnings)).
     // Weekends: old free 8h grant. Unparseable day fails closed (gated).
     private static double WorkoutGrantedFor(string todayLogicalDay, int earnedSeconds)
     {
@@ -147,7 +147,7 @@ public class TimerEngine
         };
         // Weekly Dota usage survives day rollovers inside the same week
         // (including this week's borrows + this week's advance deduction +
-        // this week's verified workout earnings).
+        // this week's cached workout earnings).
         if (old != null && old.DotaWeekStart == week)
         {
             st.DotaUsedSeconds = old.DotaUsedSeconds;
@@ -225,7 +225,7 @@ public class TimerEngine
         }
     }
 
-    // Apply verified weekly workout earnings (called by the service's periodic
+    // Apply weekly workout earnings (called by the service's periodic
     // WorkoutService sync, never by the tick path). Only successful fetches
     // update the cache: failures keep the previous value, fresh state is 0.
     public void ApplyWorkoutEarned(string weekStartLogicalDay, int earnedSeconds, DateTime nowUtc)
@@ -257,7 +257,7 @@ public class TimerEngine
     public async Task<bool> RefreshWorkoutCreditsAsync(CancellationToken ct = default)
     {
         var source = _workout;
-        if (source == null) return false;
+        if (source is null or NullWorkoutCreditSource) return false;
         string week, today;
         var nowUtc = _utcNow();
         lock (_lock)
@@ -270,7 +270,7 @@ public class TimerEngine
         {
             earned = await source.GetWeeklyEarnedSecondsAsync(week, today, ct).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             _log.LogWarning(ex, "Workout credit sync failed; keeping cached earned value.");
             return false;
@@ -804,10 +804,10 @@ public class TimerEngine
                     st.SessionUsedSeconds = sessionMax;
                 if (dotaRunning && !dotaForbidden)
                 {
-                    st.DotaUsedSeconds += gap.TotalSeconds;
-                    if (st.DotaUsedSeconds > effectiveDota())
-                        st.DotaUsedSeconds = effectiveDota();
-                    if (Left(effectiveDota(), st.DotaUsedSeconds) <= 0)
+                    // Corrections can lower earned credit below already consumed
+                    // time. Never refund that historical usage by clamping down.
+                    st.DotaUsedSeconds += Math.Min(gap.TotalSeconds, dotaLeft());
+                    if (st.DotaUsedSeconds < effectiveDota() && dotaLeft() <= 0)
                         st.DotaUsedSeconds = effectiveDota();
                 }
                 // Per-game identity log (informational, for precise tracking later).

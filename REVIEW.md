@@ -1,5 +1,41 @@
 # Code review and fixes
 
+## Current review: Notify/Tasker capture stage (2026-11-16)
+
+Strava integration and OAuth are removed. `WorkoutService` is a toy authenticated
+raw-body capture server, with atomic per-request JSON files under
+`DATA_DIR/captures`. No workout payload schema or duration conversion is assumed.
+Unknown content types, invalid JSON and binary input are preserved for analysis;
+request bodies are limited to 256 KiB. Credential headers and query strings are
+excluded from capture metadata. `WORKOUT_PIPELINE.md` documents the flow, local
+probe, deployment inputs, hardware cases and the decisions deferred until samples
+exist. `/api/credit` returns HTTP 503 rather than erasing cached timer credit.
+
+Additional client/enforcement fixes from this review:
+
+- Blank structured workout settings no longer hide environment-variable aliases.
+  The host explicitly loads configuration from beside the executable.
+- Workout polling runs in a separate hosted worker; sequential HTTP requests and
+  timeouts cannot pause the 15-second enforcement loop.
+- HTTP timeouts and malformed credit responses preserve cached credit;
+  unconfigured sources do not claim a successful sync or overwrite that cache.
+  Shutdown cancellation still propagates.
+- A downward workout-credit correction no longer reduces already-consumed Dota
+  time. Only the weekly rollover resets that usage.
+
+Verification: Release solution build passes with zero warnings/errors; 49 tests
+pass, including raw capture formats, auth, missing tokens, concurrent uploads,
+known/unknown-length size limits, removed OAuth routes, unavailable credit,
+configuration fallback, HTTP response validation, timeout/cache behavior,
+enforcement during a pending sync and consumption after a credit correction.
+Setup-script checks pass. No hardware, VPS deployment, or live Steam validation
+is claimed; production credit mapping is intentionally deferred.
+
+## Historical review before the capture-stage replacement
+
+The notes below describe the previous Strava implementation and its verification,
+not the current capture server. The current pipeline is described above.
+
 Reviewed all tracked application, service, shared-policy, workout API, setup,
 deployment, and demo sources. Existing policy values and state version 7 are
 preserved (v7: weekday workout-gated Dota, weekends on the free grant, full

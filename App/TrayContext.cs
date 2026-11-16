@@ -217,7 +217,7 @@ public class TrayContext : ApplicationContext
                 {
                     _dotaTold = true;
                     Balloon("Dota 2 time is up", resp.WorkoutGatesToday && resp.WorkoutDotaEarnedSeconds <= 0
-                        ? "No workout credit — Dota needs a verified workout. Other games continue."
+                        ? "No workout credit — Dota workout allowance is empty. Other games continue."
                         : "Weekly Dota budget used. Dota is blocked until Monday 03:00; other games continue.");
                 }
             }

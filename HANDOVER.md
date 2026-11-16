@@ -4,7 +4,10 @@ See `REVIEW.md` for the current implementation and verification, and `RESETS.md`
 for the wipe history. The notes below are historical; state is v7
 (weekday workout-gated Dota: Mon–Fri playable Dota = min(8h cap, earned)
 + borrows − deductions, fail-closed at 0; Sat/Sun keep the free 8h grant).
-The Windows app consumes workout credits via the service's 15-minute sync.
+Strava has been removed. WorkoutService is now a raw Notify/Tasker capture demo;
+credit mapping waits for hardware samples. See `WORKOUT_PIPELINE.md` for the
+current plan and setup. The Windows credit consumer still polls independently
+every 15 minutes, but capture-only HTTP 503 responses preserve cached credit.
 
 ---
 

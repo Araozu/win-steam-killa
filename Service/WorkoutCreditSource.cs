@@ -4,7 +4,7 @@ using Shared;
 
 namespace Service;
 
-// Weekly verified workout credit backing workout-gated Dota (v7).
+// Weekly workout credit backing workout-gated Dota (v7).
 // Production source sums WorkoutService daily /api/credit dotaSeconds for each
 // logical day in the current Mon-03:00 week. Failures keep the cached value:
 // callers only apply successful fetches, so offline/transient errors never
@@ -14,11 +14,11 @@ public interface IWorkoutCreditSource
     Task<int> GetWeeklyEarnedSecondsAsync(string weekStartLogicalDay, string todayLogicalDay, CancellationToken ct);
 }
 
-// No-op source: unconfigured service. Returns 0 earned (fail-closed).
+// Unconfigured service: never treat missing configuration as a successful sync.
 public sealed class NullWorkoutCreditSource : IWorkoutCreditSource
 {
     public Task<int> GetWeeklyEarnedSecondsAsync(string weekStartLogicalDay, string todayLogicalDay, CancellationToken ct)
-        => Task.FromResult(0);
+        => throw new InvalidOperationException("Workout credit source is not configured.");
 }
 
 // HTTP source against WorkoutService (/api/credit?day=yyyy-MM-dd, Bearer).
@@ -45,7 +45,8 @@ public sealed class HttpWorkoutCreditSource : IWorkoutCreditSource
         {
             ct.ThrowIfCancellationRequested();
             string day = d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-            total += await GetDayEarnedAsync(day, ct).ConfigureAwait(false);
+            total += Math.Min(await GetDayEarnedAsync(day, ct).ConfigureAwait(false),
+                (long)Limits.DotaWeeklyBudget.TotalSeconds);
             if (total >= (long)Limits.DotaWeeklyBudget.TotalSeconds)
                 return (int)Limits.DotaWeeklyBudget.TotalSeconds;
         }
@@ -62,9 +63,13 @@ public sealed class HttpWorkoutCreditSource : IWorkoutCreditSource
         resp.EnsureSuccessStatusCode();
         using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
         using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct).ConfigureAwait(false);
-        if (doc.RootElement.TryGetProperty("dotaSeconds", out var el)
-            && el.TryGetInt64(out var v) && v > 0)
-            return v;
-        return 0;
+        var root = doc.RootElement;
+        if (root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("day", out var responseDay)
+            || responseDay.ValueKind != JsonValueKind.String || responseDay.GetString() != day
+            || !root.TryGetProperty("dotaSeconds", out var el)
+            || el.ValueKind != JsonValueKind.Number || !el.TryGetInt64(out var v) || v < 0)
+            throw new JsonException("Invalid workout credit response.");
+        return v;
     }
 }

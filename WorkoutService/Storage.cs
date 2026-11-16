@@ -1,100 +1,39 @@
-using System.Globalization;
+using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 
-// ---------- storage (JSON files under DATA_DIR, single-user) ----------
+sealed record RequestCapture(string Id, DateTimeOffset ReceivedAtUtc, string? ContentType,
+    string UserAgent, int BodyLength, string? BodyText, string BodyBase64);
 
-sealed record StravaToken(string AccessToken, string RefreshToken, long ExpiresAt);
-
-sealed class TokenStore
+sealed class CaptureStore
 {
-    private readonly WorkoutConfig _c;
-    private readonly SemaphoreSlim _gate = new(1, 1);
-    public TokenStore(WorkoutConfig c) => _c = c;
-    string Path => System.IO.Path.Combine(Dir(), "strava_token.json");
-    string Dir()
-    {
-        var d = string.IsNullOrWhiteSpace(_c.DataDir) ? "./data" : _c.DataDir;
-        Directory.CreateDirectory(d);
-        return d;
-    }
-    public async Task<StravaToken?> LoadAsync()
-    {
-        await _gate.WaitAsync();
-        try
-        {
-            if (!File.Exists(Path)) return null;
-            var json = await File.ReadAllTextAsync(Path);
-            return JsonSerializer.Deserialize<StravaToken>(json);
-        }
-        finally { _gate.Release(); }
-    }
-    public async Task SaveAsync(StravaToken t)
-    {
-        await _gate.WaitAsync();
-        try { await AtomicJson.SaveAsync(Path, t); }
-        finally { _gate.Release(); }
-    }
-}
+    private readonly string _directory;
+    public CaptureStore(CaptureConfig config) => _directory = Path.Combine(config.DataDir, "captures");
 
-sealed record CachedActivity(
-    long Id,
-    string Name,
-    string Type,
-    string? SportType,
-    DateTimeOffset StartUtc,
-    long MovingTime,
-    bool Manual);
-
-sealed record ActivitySnap(DateTimeOffset UpdatedAtUtc, List<CachedActivity> Activities);
-
-sealed class ActivityStore
-{
-    private readonly WorkoutConfig _c;
-    private readonly SemaphoreSlim _gate = new(1, 1);
-    public ActivityStore(WorkoutConfig c) => _c = c;
-    string Path => System.IO.Path.Combine(Dir(), "activities.json");
-    string Dir()
+    public async Task<RequestCapture> SaveAsync(byte[] body, string? contentType, string userAgent, CancellationToken ct)
     {
-        var d = string.IsNullOrWhiteSpace(_c.DataDir) ? "./data" : _c.DataDir;
-        Directory.CreateDirectory(d);
-        return d;
-    }
-    public async Task<ActivitySnap?> LoadAsync()
-    {
-        await _gate.WaitAsync();
-        try
-        {
-            if (!File.Exists(Path)) return null;
-            var json = await File.ReadAllTextAsync(Path);
-            return JsonSerializer.Deserialize<ActivitySnap>(json);
-        }
-        finally { _gate.Release(); }
-    }
-    public async Task SaveAsync(ActivitySnap s)
-    {
-        await _gate.WaitAsync();
-        try { await AtomicJson.SaveAsync(Path, s); }
-        finally { _gate.Release(); }
-    }
-}
-
-static class AtomicJson
-{
-    public static async Task SaveAsync<T>(string path, T value)
-    {
+        string? text;
+        try { text = new UTF8Encoding(false, true).GetString(body); }
+        catch (DecoderFallbackException) { text = null; }
+        var capture = new RequestCapture(Guid.NewGuid().ToString("N"), DateTimeOffset.UtcNow,
+            contentType, userAgent, body.Length, text, Convert.ToBase64String(body));
+        Directory.CreateDirectory(_directory);
+        // IDs and filenames come from the server, never from phone input. Atomic
+        // publication means readers only see completed captures. Keep every retry
+        // so duplicate delivery and changing payloads can be inspected later.
+        var path = Path.Combine(_directory, capture.Id + ".json");
         var temp = path + ".tmp";
         try
         {
-            using (var file = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
+            using (var file = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
                 if (!OperatingSystem.IsWindows())
                     File.SetUnixFileMode(temp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-                await JsonSerializer.SerializeAsync(file, value);
+                await JsonSerializer.SerializeAsync(file, capture, cancellationToken: ct);
                 file.Flush(flushToDisk: true);
             }
-            File.Move(temp, path, overwrite: true);
+            File.Move(temp, path);
         }
         finally { if (File.Exists(temp)) File.Delete(temp); }
+        return capture;
     }
 }
