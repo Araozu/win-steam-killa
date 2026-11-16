@@ -6,296 +6,221 @@
 <title>Steam Timer</title>
 <style>
   :root {
-    --bg: #14171C;
-    --line: #242A33;
-    --track: #232A33;
-    --allowed: #343D4A;
-    --green: #3FB950;
-    --blue: #4C9EEB;
-    --red: #E5534B;
-    --text: #E6EDF3;
-    --dark: #0D1117;
-    --muted: #8B949E;
-    --btn: #1E242C;
-    --btn-line: #343C47;
+    --bg: #ededed;
+    --card: #ffffff;
+    --line: #e3e3e3;
+    --text: #111111;
+    --muted: #777777;
+    --track: #efefef;
+    --black: #111111;
+    --magenta: #c00464;
+    --green: #1faa53;
+    --red: #d92d20;
+    --btn-line: #d9d9d9;
     --font: "Segoe UI", system-ui, -apple-system, sans-serif;
+    --mono: "Consolas", "SF Mono", ui-monospace, monospace;
   }
-
   * { box-sizing: border-box; }
-
   html, body {
     margin: 0;
     background: var(--bg);
     color: var(--text);
-    font: 13px/1.3 var(--font);
+    font: 16px/1.35 var(--font);
   }
-
   .win {
     max-width: 440px;
-    margin: 20px auto;
-    padding: 16px 18px 14px;
+    margin: 0 auto;
+    padding: 18px 16px 32px;
     display: grid;
     gap: 14px;
   }
-
-  .head {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-  .title { font-size: 14px; font-weight: 600; }
-  .detector {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    color: var(--muted);
-  }
-  .dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--green);
-  }
-  .dot.idle { background: var(--muted); }
-
-  section {
-    border-top: 1px solid var(--line);
-    padding-top: 12px;
-  }
-  .win > section:first-of-type { border-top: 0; padding-top: 0; }
-
-  .row {
+  .remaining {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    margin-bottom: 6px;
+    padding: 4px 2px 0;
   }
-  .name { font-weight: 600; }
-  .aside {
-    font-size: 12px;
-    color: var(--muted);
+  .remaining .label { font-size: 28px; font-weight: 400; }
+  .remaining .time {
+    font-family: var(--mono);
+    font-size: 38px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
-
+  .remaining .time .u {
+    font-size: 20px;
+    font-weight: 400;
+    color: var(--muted);
+    margin: 0 2px 0 1px;
+  }
+  .section-title {
+    font-size: 22px;
+    font-weight: 400;
+    margin: 8px 2px -6px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 14px 14px 12px;
+  }
+  .card h3 {
+    margin: 0 0 8px;
+    font-size: 17px;
+    font-weight: 700;
+  }
+  .card .sub {
+    margin: -4px 0 8px;
+    color: var(--muted);
+    font-size: 16px;
+  }
   .bar {
     position: relative;
-    height: 22px;
+    height: 16px;
     background: var(--track);
-    border-radius: 4px;
+    border-radius: 999px;
     overflow: hidden;
-    --p: 100%;
   }
-  .bar.hatch {
-    background: repeating-linear-gradient(-45deg, rgba(229, 83, 75, 0.45) 0 2px, var(--track) 2px 7px);
-  }
-  .allowed {
+  .bar .fill {
     position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
+    left: 0; top: 0; bottom: 0;
     width: 0;
-    background: var(--allowed);
-  }
-  .fill {
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: 0;
-    background: var(--blue);
+    border-radius: 999px;
     transition: width 0.6s ease;
   }
+  .fill.black { background: var(--black); }
+  .fill.magenta { background: var(--magenta); }
   .fill.green { background: var(--green); }
   .fill.red { background: var(--red); }
-  .marker {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    width: 2px;
-    background: var(--text);
-  }
-  .txt {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 600;
-    white-space: nowrap;
-    font-variant-numeric: tabular-nums;
-  }
-  .txt-w {
-    color: var(--dark);
-    clip-path: inset(0 calc(100% - var(--p)) 0 0);
-  }
-
   .scale {
-    position: relative;
-    height: 14px;
-    margin-top: 5px;
-    font-size: 11.5px;
-    color: var(--muted);
-    font-variant-numeric: tabular-nums;
-  }
-  .scale span { position: absolute; top: 0; white-space: nowrap; }
-  .scale .l { left: 0; }
-  .scale .r { right: 0; }
-  .scale .m { transform: translateX(-50%); }
-
-  .borrow {
     display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-top: 8px;
-  }
-  .borrow span {
-    font-size: 12px;
+    justify-content: space-between;
+    margin-top: 6px;
     color: var(--muted);
+    font-size: 15px;
     font-variant-numeric: tabular-nums;
+    position: relative;
   }
-
+  .scale .mid {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    white-space: nowrap;
+  }
+  .borrow-row {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 10px;
+  }
   .btn {
-    font: 12.5px/1.2 var(--font);
-    padding: 5px 10px;
-    background: var(--btn);
+    font: 15px/1.2 var(--font);
+    padding: 7px 14px;
+    background: #fff;
     color: var(--text);
     border: 1px solid var(--btn-line);
-    border-radius: 4px;
+    border-radius: 7px;
     cursor: pointer;
     white-space: nowrap;
   }
-  .btn:hover:not(:disabled) { border-color: var(--muted); }
+  .btn:hover:not(:disabled) { border-color: #999; }
   .btn:disabled { opacity: 0.45; cursor: default; }
-  .btn.danger { color: var(--red); border-color: rgba(229, 83, 75, 0.5); }
-  .btn.danger:hover:not(:disabled) {
-    background: rgba(229, 83, 75, 0.12);
-    border-color: var(--red);
-  }
-
-  .actions {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    align-items: center;
-  }
-
+  .btn.danger { color: var(--red); border-color: rgba(217,45,32,.5); }
   .msg {
     min-height: 1.3em;
     margin: 0;
-    font-size: 12px;
+    font-size: 13px;
     color: var(--muted);
   }
-
-  details {
-    border-top: 1px solid var(--line);
-    padding-top: 10px;
-    font-size: 12px;
+  details.old {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 10px 14px;
+    font-size: 13px;
   }
-  summary {
+  details.old summary {
     cursor: pointer;
     font-weight: 600;
     color: var(--muted);
   }
-  dl {
+  details.old dl {
     display: grid;
     grid-template-columns: max-content 1fr;
     gap: 4px 14px;
     margin: 10px 0 8px;
     font-variant-numeric: tabular-nums;
   }
-  dt { color: var(--muted); }
-  dd { margin: 0; }
-
-  :focus-visible {
-    outline: 2px solid var(--blue);
-    outline-offset: 2px;
-  }
-
+  details.old dt { color: var(--muted); }
+  details.old dd { margin: 0; }
+  details.old .row { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0; }
+  :focus-visible { outline: 2px solid #4C9EEB; outline-offset: 2px; }
   @media (prefers-reduced-motion: reduce) {
-    .fill { transition: none; }
+    .bar .fill { transition: none; }
   }
 </style>
 </head>
 <body>
 <main class="win">
-  <header class="head">
-    <span class="title">Steam Timer</span>
-    <span class="detector"><span class="dot" id="dot"></span><span id="detector">Steam detected</span></span>
-  </header>
+  <div class="remaining">
+    <span class="label">Remaining:</span>
+    <span class="time" id="remaining">00<span class="u">h</span>00<span class="u">m</span>00<span class="u">s</span></span>
+  </div>
 
-  <section>
-    <div class="row">
-      <span class="name" id="session-name">Session - playing</span>
-      <span class="aside" id="session-aside"></span>
-    </div>
-    <div class="bar hatch" id="session-bar">
-      <div class="allowed" id="session-allowed"></div>
-      <div class="fill green" id="session-fill"></div>
-      <div class="marker" id="session-marker"></div>
-      <span class="txt" id="session-txt"></span>
-      <span class="txt txt-w" id="session-txt-w" aria-hidden="true"></span>
-    </div>
-    <div class="scale">
-      <span class="l">0</span>
-      <span class="m" id="session-mid"></span>
-      <span class="r" id="session-max"></span>
-    </div>
-  </section>
+  <div class="section-title">Limits:</div>
 
-  <section>
-    <div class="row">
-      <span class="name">Today</span>
-    </div>
-    <div class="bar" id="day-bar">
-      <div class="fill" id="day-fill"></div>
-      <span class="txt" id="day-txt"></span>
-      <span class="txt txt-w" id="day-txt-w" aria-hidden="true"></span>
-    </div>
-    <div class="scale">
-      <span class="l">0</span>
-      <span class="r" id="day-max"></span>
-    </div>
-    <div class="borrow">
+  <div class="card">
+    <h3>Time of day</h3>
+    <div class="bar"><div class="fill black" id="tod-fill"></div></div>
+    <div class="scale"><span id="tod-start">20:15</span><span class="mid" id="tod-now">20:45</span><span id="tod-end">22:00</span></div>
+  </div>
+
+  <div class="card">
+    <h3>Session length</h3>
+    <div class="sub">Max 2h per session</div>
+    <div class="bar"><div class="fill magenta" id="sess-fill"></div></div>
+    <div class="scale"><span></span><span class="mid" id="sess-mid">0h 55m</span><span id="sess-max">2h</span></div>
+  </div>
+
+  <div class="section-title">Allowances</div>
+
+  <div class="card">
+    <h3>Daily budget</h3>
+    <div class="bar"><div class="fill green" id="day-fill"></div></div>
+    <div class="scale"><span></span><span class="mid" id="day-mid">0h 19m</span><span id="day-max">1h 30m</span></div>
+    <div class="borrow-row">
       <button class="btn" id="borrow-day"></button>
-      <span id="day-next"></span>
     </div>
-  </section>
+  </div>
 
-  <section>
-    <div class="row">
-      <span class="name">Dota 2, this week</span>
-    </div>
-    <div class="bar" id="dota-bar">
-      <div class="fill" id="dota-fill"></div>
-      <span class="txt" id="dota-txt"></span>
-      <span class="txt txt-w" id="dota-txt-w" aria-hidden="true"></span>
-    </div>
-    <div class="scale">
-      <span class="l">0</span>
-      <span class="r" id="dota-max"></span>
-    </div>
-    <div class="borrow">
+  <div class="card">
+    <h3>Weekly Dota 2 budget</h3>
+    <div class="bar"><div class="fill red" id="dota-fill"></div></div>
+    <div class="scale"><span></span><span class="mid" id="dota-mid">5h 34m</span><span id="dota-max">8h</span></div>
+    <div class="borrow-row">
       <button class="btn" id="borrow-dota"></button>
-      <span id="dota-next"></span>
     </div>
-  </section>
+  </div>
 
-  <section class="actions">
-    <button class="btn" id="recheck">Recheck now</button>
-    <button class="btn danger" id="force">Force close Steam + games</button>
-  </section>
-  <p class="msg" id="action" aria-live="polite"></p>
-
-  <details>
+  <details class="old">
     <summary>Details</summary>
+    <div class="row">
+      <span id="detector">Steam detected</span>
+    </div>
+    <div class="row">
+      <button class="btn" id="recheck">Recheck now</button>
+      <button class="btn danger" id="force">Force close Steam + games</button>
+      <button class="btn" id="reset">Reset demo</button>
+    </div>
+    <p class="msg" id="action" aria-live="polite"></p>
     <dl>
       <dt>Today</dt><dd id="d-day"></dd>
       <dt>Dota 2</dt><dd id="d-dota"></dd>
       <dt>Borrowed</dt><dd id="d-borrow"></dd>
       <dt>Detector</dt><dd id="d-seen"></dd>
+      <dt>Window</dt><dd id="d-window"></dd>
     </dl>
-    <button class="btn" id="reset">Reset demo</button>
   </details>
 </main>
 
@@ -305,25 +230,25 @@
   const BORROW_COST = 600;
   const DAY_FLOOR = 0.001;
   const DOTA_FLOOR = 0.5;
+  const WINDOW_TOTAL = 6300; // 20:15-22:00 = 105m
 
   const initial = {
     playing: true,
-    played: 5340,
-    windowLeft: 1800,
+    played: 3300,          // 0h 55m used
+    windowLeft: 4500,      // now = 20:45, ends 22:00
     cooldownLeft: 0,
     cooldownTotal: 0,
-    dayLeft: 5100,
-    dayBudget: 10440,
-    dotaLeft: 17700,
-    dotaBudget: 26400,
-    tomorrowBase: 14400,
+    dayLeft: 1140,         // 0h 19m left
+    dayBudget: 5400,       // 1h 30m max
+    dotaLeft: 20040,       // 5h 34m left
+    dotaBudget: 28800,     // 8h max
+    tomorrowBase: 5400,
     nextWeekBase: 28800,
     borrows: 0,
     dotaBorrows: 0,
     action: "",
   };
   const s = { ...initial };
-
   const $ = (id) => document.getElementById(id);
 
   function eff(n, floor) {
@@ -331,62 +256,43 @@
     for (let i = 2; i <= Math.max(1, n); i++) e -= 0.07 + 0.01 * (i - 2);
     return Math.max(floor, e);
   }
-
   function fmt(sec) {
     sec = Math.max(0, Math.floor(sec));
     const h = Math.floor(sec / 3600);
     const m = Math.floor((sec % 3600) / 60);
     return h ? `${h}h ${String(m).padStart(2, "0")}m` : `${m}m`;
   }
-
-  function fmtGain(sec) {
-    const m = Math.floor(sec / 60);
-    const r = sec % 60;
-    return r ? `${m}m ${String(r).padStart(2, "0")}s` : `${m}m`;
+  function fmtShort(sec) {
+    sec = Math.max(0, Math.floor(sec));
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    return `${h}h ${String(m).padStart(2, "0")}m`;
   }
-
-  function fmtCooldown(sec) {
-    sec = Math.max(0, Math.ceil(sec));
-    if (sec >= 3600) return fmt(sec);
-    const m = Math.floor(sec / 60);
-    const r = sec % 60;
-    if (m === 0) return `${r}s`;
-    return `${m}m ${String(r).padStart(2, "0")}s`;
+  function fmtMax(sec) {
+    sec = Math.max(0, Math.round(sec));
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    return m === 0 ? `${h}h` : `${h}h ${String(m).padStart(2, "0")}m`;
   }
-
-  function clock(ms) {
-    const d = new Date(ms);
-    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  function fmtClock(totalLeft) {
+    // window end 22:00 fixed for demo; now = end - left
+    const endMin = 22 * 60;
+    const nowMin = endMin - Math.ceil(totalLeft / 60);
+    const h = Math.floor(nowMin / 60);
+    const m = nowMin % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
   }
-
   function pct(e) {
     return e < 0.005 ? "0.1%" : `${Math.round(e * 100)}%`;
   }
-
-  function clamp01(x) {
-    return Math.min(1, Math.max(0, x));
-  }
-
-  function setBar(id, frac, text) {
-    const f = clamp01(frac) * 100;
-    $(`${id}-bar`).style.setProperty("--p", `${f}%`);
-    $(`${id}-fill`).style.width = `${f}%`;
-    $(`${id}-txt`).textContent = text;
-    $(`${id}-txt-w`).textContent = text;
-  }
+  function clamp01(x) { return Math.min(1, Math.max(0, x)); }
 
   function playableLimit() {
     const base = s.playing ? s.played : 0;
     return Math.min(SESSION_MAX, base + Math.min(s.dayLeft, s.windowLeft));
   }
-
-  function tomorrowLeft() {
-    return Math.max(0, s.tomorrowBase - s.borrows * BORROW_COST);
-  }
-
-  function nextWeekLeft() {
-    return Math.max(0, s.nextWeekBase - s.dotaBorrows * BORROW_COST);
-  }
+  function tomorrowLeft() { return Math.max(0, s.tomorrowBase - s.borrows * BORROW_COST); }
+  function nextWeekLeft() { return Math.max(0, s.nextWeekBase - s.dotaBorrows * BORROW_COST); }
 
   function endSession(reason) {
     s.playing = false;
@@ -396,11 +302,11 @@
   }
 
   function tick() {
+    if (s.windowLeft > 0) s.windowLeft = Math.max(0, s.windowLeft - 1);
     if (s.playing) {
       s.played++;
       s.dayLeft = Math.max(0, s.dayLeft - 1);
       s.dotaLeft = Math.max(0, s.dotaLeft - 1);
-      s.windowLeft = Math.max(0, s.windowLeft - 1);
       if (s.played >= playableLimit()) endSession("Session over. Cooldown started.");
     } else if (s.cooldownLeft > 0) {
       s.cooldownLeft--;
@@ -412,81 +318,78 @@
     render();
   }
 
-  function renderSession() {
-    const playing = s.playing;
-    const cooling = !playing && s.cooldownLeft > 0;
-    const bar = $("session-bar");
-    const limit = playableLimit();
+  function renderRemaining() {
+    let rem = 0;
+    if (s.playing) rem = Math.max(0, playableLimit() - s.played);
+    const h = Math.floor(rem / 3600);
+    const m = Math.floor((rem % 3600) / 60);
+    const sec = rem % 60;
+    const p = (n) => String(n).padStart(2, "0");
+    $("remaining").innerHTML = `${p(h)}<span class="u">h</span>${p(m)}<span class="u">m</span>${p(sec)}<span class="u">s</span>`;
+  }
 
-    if (cooling) {
-      bar.classList.remove("hatch");
-      $("session-allowed").style.width = "0%";
-      $("session-fill").className = "fill red";
-      setBar("session", s.cooldownLeft / s.cooldownTotal, `cooldown ${fmtCooldown(s.cooldownLeft)}`);
-      $("session-marker").hidden = true;
-      $("session-name").textContent = "Cooldown";
-      $("session-aside").textContent = `back ${clock(Date.now() + s.cooldownLeft * 1000)}`;
-      $("session-mid").textContent = "";
-      $("session-max").textContent = fmt(s.cooldownTotal);
-      return;
-    }
-
-    const played = playing ? s.played : 0;
-    bar.classList.add("hatch");
-    $("session-allowed").style.width = `${(limit / SESSION_MAX) * 100}%`;
-    $("session-fill").className = "fill green";
-    setBar("session", played / SESSION_MAX, `${fmt(played)} played`);
-
-    const marker = $("session-marker");
-    marker.hidden = false;
-    marker.style.left = `${(limit / SESSION_MAX) * 100}%`;
-
-    $("session-name").textContent = playing ? "Session - playing" : "Session";
-    $("session-aside").textContent =
-      playing ? `ends ${clock(Date.now() + (limit - s.played) * 1000)}` : "";
-    const showMid = limit < SESSION_MAX - 600;
-    $("session-mid").textContent = showMid ? fmt(limit) : "";
-    $("session-mid").style.left = `${(limit / SESSION_MAX) * 100}%`;
-    $("session-max").textContent = fmt(SESSION_MAX);
+  function renderBorrow(id, e) {
+    const btn = $(id);
+    btn.textContent = `Borrow 10m (${pct(e)})`;
+    const t = clamp01(1 - (e - DAY_FLOOR) / (0.95 - DAY_FLOOR));
+    // heat toward red as effectiveness drops (light theme)
+    const from = [255, 255, 255];
+    const to = [250, 200, 200];
+    const c = from.map((v, i) => Math.round(v + (to[i] - v) * t));
+    btn.style.background = `rgb(${c.join(",")})`;
+    if (t > 0.5) btn.style.borderColor = "rgba(217,45,32,.6)";
   }
 
   function render() {
-    renderSession();
+    renderRemaining();
 
-    setBar("day", s.dayLeft / s.dayBudget, s.dayLeft > 0 ? `${fmt(s.dayLeft)} left` : "used up");
-    $("day-max").textContent = fmt(s.dayBudget);
+    // Time of day: fills as window elapses, blocks at end
+    const elapsed = WINDOW_TOTAL - s.windowLeft;
+    $("tod-fill").style.width = `${clamp01(elapsed / WINDOW_TOTAL) * 100}%`;
+    $("tod-start").textContent = "20:15";
+    $("tod-now").textContent = fmtClock(s.windowLeft);
+    $("tod-end").textContent = "22:00";
 
-    setBar("dota", s.dotaLeft / s.dotaBudget, `${fmt(s.dotaLeft)} left`);
-    $("dota-max").textContent = fmt(s.dotaBudget);
+    // Session: fills as you play, blocks when full
+    const cooling = !s.playing && s.cooldownLeft > 0;
+    if (cooling) {
+      $("sess-fill").style.width = `${clamp01(s.cooldownLeft / s.cooldownTotal) * 100}%`;
+      $("sess-fill").className = "fill red";
+      $("sess-mid").textContent = `cooldown ${fmt(s.cooldownLeft)}`;
+    } else {
+      $("sess-fill").style.width = `${clamp01(s.played / SESSION_MAX) * 100}%`;
+      $("sess-fill").className = "fill magenta";
+      $("sess-mid").textContent = fmtShort(s.played);
+    }
+    $("sess-max").textContent = fmtMax(SESSION_MAX);
 
+    // Daily allowance: depletes, blocks when empty. Borrow grows max + left.
+    $("day-fill").style.width = `${clamp01(s.dayLeft / s.dayBudget) * 100}%`;
+    $("day-mid").textContent = fmtShort(s.dayLeft);
+    $("day-max").textContent = fmtMax(s.dayBudget);
     const dayEff = eff(s.borrows + 1, DAY_FLOOR);
-    renderBorrow("borrow-day", dayEff, DAY_FLOOR, "+10m from tomorrow");
+    renderBorrow("borrow-day", dayEff);
     $("borrow-day").disabled = tomorrowLeft() < BORROW_COST;
-    $("day-next").textContent = `Tomorrow ${fmt(tomorrowLeft())}`;
 
+    // Dota allowance: same
+    $("dota-fill").style.width = `${clamp01(s.dotaLeft / s.dotaBudget) * 100}%`;
+    $("dota-mid").textContent = fmtShort(s.dotaLeft);
+    $("dota-max").textContent = fmtMax(s.dotaBudget);
     const dotaEff = eff(s.dotaBorrows + 1, DOTA_FLOOR);
-    renderBorrow("borrow-dota", dotaEff, DOTA_FLOOR, "+10m from next week");
-    $("borrow-dota").disabled = nextWeekLeft() < BORROW_COST;
-    $("dota-next").textContent = `Next week ${fmt(nextWeekLeft())}`;
+    // reuse heat but with dota floor
+    const btn = $("borrow-dota");
+    btn.textContent = `Borrow 10m (${pct(dotaEff)})`;
+    const t = clamp01(1 - (dotaEff - DOTA_FLOOR) / (0.95 - DOTA_FLOOR));
+    btn.style.background = `rgb(${Math.round(255)},${Math.round(255 - 55 * t)},${Math.round(255 - 55 * t)})`;
+    btn.disabled = nextWeekLeft() < BORROW_COST;
 
     $("detector").textContent = s.playing ? "Steam detected" : "Nothing detected";
-    $("dot").classList.toggle("idle", !s.playing);
     $("action").textContent = s.action;
-
-    $("d-day").textContent = `${fmt(s.dayBudget)} budget, ${fmt(s.dayBudget - s.dayLeft)} used`;
-    $("d-dota").textContent = `${fmt(s.dotaBudget)} budget, ${fmt(s.dotaBudget - s.dotaLeft)} used`;
+    $("d-day").textContent = `${fmtShort(s.dayBudget)} budget, ${fmtShort(s.dayBudget - s.dayLeft)} used, tomorrow ${fmtShort(tomorrowLeft())}`;
+    $("d-dota").textContent = `${fmtShort(s.dotaBudget)} budget, ${fmtShort(s.dotaBudget - s.dotaLeft)} used, next week ${fmtShort(nextWeekLeft())}`;
     $("d-borrow").textContent = `${s.borrows} today, ${s.dotaBorrows} this week`;
     $("d-seen").textContent = s.playing ? "steam, steamwebhelper, dota2" : "nothing";
-  }
-
-  function renderBorrow(id, e, floor, label) {
-    const btn = $(id);
-    btn.textContent = `${label} (${pct(e)})`;
-    const t = clamp01(1 - (e - floor) / (0.95 - floor));
-    const from = [30, 36, 44];
-    const to = [120, 40, 38];
-    const c = from.map((v, i) => Math.round(v + (to[i] - v) * t));
-    btn.style.background = `rgb(${c.join(",")})`;
+    $("d-window").textContent = `${fmtClock(s.windowLeft)} now, ${fmtShort(s.windowLeft)} left in 20:15-22:00`;
   }
 
   $("borrow-day").addEventListener("click", () => {
@@ -494,38 +397,28 @@
     s.borrows++;
     s.dayBudget += gain;
     s.dayLeft += gain;
-    s.action = `Moved 10m from tomorrow. Gained ${fmtGain(gain)} today.`;
+    s.action = `Moved 10m from tomorrow. Gained ${gain}s today.`;
     render();
   });
-
   $("borrow-dota").addEventListener("click", () => {
     const gain = Math.round(BORROW_COST * eff(s.dotaBorrows + 1, DOTA_FLOOR));
     s.dotaBorrows++;
     s.dotaBudget += gain;
     s.dotaLeft += gain;
-    s.action = `Moved 10m from next week. Gained ${fmtGain(gain)} this week.`;
+    s.action = `Moved 10m from next week. Gained ${gain}s this week.`;
     render();
   });
-
   $("recheck").addEventListener("click", () => {
     s.action = s.playing ? "Still running: steam, steamwebhelper, dota2." : "Nothing running. Timer is idle.";
     render();
   });
-
   $("force").addEventListener("click", () => {
-    if (!s.playing) {
-      s.action = "Steam is not running. Nothing to close.";
-      return render();
-    }
+    if (!s.playing) { s.action = "Steam is not running. Nothing to close."; return render(); }
     if (!confirm("Force-close Steam and games now? The timer stops; the cooldown for time played still applies.")) return;
     endSession("Closed Steam and games. Timer stopped, cooldown started.");
     render();
   });
-
-  $("reset").addEventListener("click", () => {
-    Object.assign(s, initial);
-    render();
-  });
+  $("reset").addEventListener("click", () => { Object.assign(s, initial); render(); });
 
   render();
   setInterval(tick, 1000);
