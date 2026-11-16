@@ -43,6 +43,99 @@ Tasker's HTTP Request action supports a URL, headers, a raw text body, and file
 uploads. This is the transport to the receiver, independent of the eventual
 workout schema. [Tasker HTTP Request documentation](https://tasker.joaoapps.com/userguide/en/help/ah_http_request.html)
 
+## Tasker feasibility and export investigation (2026-11-16)
+
+**Decision:** use Tasker as the phone-side automation and transport. First test
+whether Notify can supply completed workout records; do not infer workouts from
+steps or heart-rate samples. The export command is worth testing, but is not yet
+a confirmed workout source.
+
+### Documented Notify commands
+
+The [Xiaomi integration reference](https://www.mibandnotify.com/help/tasker_xiaomi_help.php?lang=en)
+lists `com.mc.xiaomi.taskerExportAllSpreadsheetData` for steps, sleep, heart and
+weight. It does **not** promise workout rows. Optional `start` and `end` extras
+are long Unix timestamps in milliseconds; defaults cover local midnight to now.
+Exports go under `export` in the configured backup folder, otherwise the app's
+external files directory. No completion broadcast or filename contract is given.
+
+Use Tasker **Send Intent**, target **Broadcast Receiver**, action above, package
+`com.mc.xiaomi1`; leave Class, Data, MIME and categories empty. The
+[Notify send tutorial](https://www.mibandnotify.com/help/tasker_send_intent_tutorial.php)
+confirms the package. Include `password:YOUR_NOTIFY_PASSWORD` if configured;
+this is separate from the receiver's bearer token. For a reproducible probe, use
+literal millisecond bounds and force long typing, e.g. `start:1735689600000L`
+and `end:1735776000000L` (example dates only; replace with the workout window).
+[Tasker Send Intent typing](https://tasker.joaoapps.com/userguide/en/intents.html)
+
+### Probe order and evidence
+
+1. **Transport first:** run the synthetic HTTP probe below, then send a literal
+   Tasker body. Check the saved envelope before introducing wearable data.
+2. **Folder access:** select a backup destination in Notify and verify Tasker can
+   list and read its exports on this Android version. Do not assume Tasker can
+   access another app's `Android/data` directory. If access fails, try a mutually
+   accessible destination using the apps' supported folder selection; otherwise
+   use manual sharing for sample collection and mark automation blocked.
+3. **One manual export:** export a narrow interval containing one known workout.
+   Record actual filenames, format, sizes, sheets/columns and units, and compare
+   them with the workout summary. Check explicitly for completed workout rows,
+   active duration, timestamps, pauses, activity type and stable identity.
+4. **One Tasker export:** run Send Intent with the same explicit interval and
+   compare the result with the manual export. A successful Send Intent action
+   alone does not prove Notify handled it or finished writing files.
+5. **Completion experiment:** record file changes and export latency. Since no
+   callback is documented, prototype bounded polling with a deadline, checking
+   for changed files and stable size/mtime across multiple observations. Copy to
+   an immutable local queue and validate file integrity before upload; stability
+   alone cannot guarantee completion. Serialize exports to avoid overwrites.
+6. **Trigger experiment:** capture workoutStarted/workoutFinished independently,
+   logging `%evtprm1` and only observed extras. Tasker exposes broadcast extras as
+   local variables with normalized names; it cannot receive every intent type.
+   [Tasker receiving rules](https://tasker.joaoapps.com/userguide/en/intents.html)
+   Test whether finish arrives before workout data is synced; retry export after
+   sync if needed. Do not assume `syncData` returns a completion acknowledgement.
+7. **Recovery:** rerun an overlapping export window after offline sync and phone
+   restart. Use explicit bounds spanning the previous logical day as well as
+   today; the export default would miss yesterday's late workout after midnight.
+   Record repeated rows and edits so later normalization can deduplicate them.
+
+### Upload files without changing their contents
+
+Use HTTP Request `POST /api/capture`, the Authorization header below, **File To
+Send** set to the discovered local queue file, and Body empty. For a binary
+probe use `Content-Type:application/octet-stream`. Do not prefix the path with a
+multipart field name: the capture endpoint stores request bytes and does not
+extract multipart attachments. Send case notes as a separate text capture and
+keep a local mapping from queued filename to returned capture ID.
+[Tasker file upload behavior](https://tasker.joaoapps.com/userguide/en/help/ah_http_request.html)
+
+Inspect `%http_response_code` and `%http_data`, handle action errors, and remove
+an item from the pending queue only after a successful capture response. Use
+bounded retry delays for network/5xx failures; keep 401/413 items for correction.
+The receiver's 256 KiB limit includes the entire request. Measure export size
+before sending; narrow the interval or preserve the file locally if too large.
+Do not silently truncate or split a spreadsheet archive into invalid files.
+Keep original binary files; Tasker's Read File is for text, not XLSX/ZIP.
+[Tasker Read File](https://tasker.joaoapps.com/userguide/en/help/ah_read_file.html)
+
+### Source selection gate
+
+| Observed result | Next step |
+| --- | --- |
+| Triggers expose reliable completed workout fields | Prefer direct event capture; use exports to reconcile missed events if suitable. |
+| Exports contain usable completed workout records | Prototype export ingestion on the server using real fixtures; finish events can request an export, with periodic catch-up. |
+| Exports contain only daily totals or sensor samples | Keep them diagnostic; investigate Notify's workout-specific manual export/share before choosing another supported source. |
+| Export files cannot be read automatically | Collect manually shared samples; resolve access before promising unattended operation. |
+
+Deliverables before implementing credit: one original export with case notes,
+a field/units/identity mapping, a repeat-sync sample, and a demonstrated recovery
+from offline delivery. After the probe succeeds, create an importable Tasker
+project with setup variables, serialized export handling, a durable upload queue
+and visible failure status. Avoid publishing guessed Tasker XML or paths before
+these checks. The server remains capture-only until the hardware checklist and
+normalization rules are satisfied.
+
 ## Run the toy receiver now
 
 From the repository root in PowerShell, with the .NET 11 SDK:
@@ -123,6 +216,10 @@ in this toy server. Review disk use during collection and keep useful samples.
 ## Hardware acceptance checklist
 
 - [ ] Confirm supported start/end triggers and capture all available fields.
+- [ ] Compare manual and Tasker spreadsheet exports; establish whether workout
+      records actually exist, rather than only sensor samples/daily aggregates.
+- [ ] Verify Tasker file access, export completion handling, upload sizes and
+      queued retry after phone restart.
 - [ ] Capture one normal workout and compare it with the Notify summary.
 - [ ] Capture pause/resume, a short workout, and a cancelled workout.
 - [ ] Capture repeat sync / repeated finish notifications for the same workout.
