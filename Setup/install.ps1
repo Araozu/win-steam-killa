@@ -18,6 +18,8 @@ try {
     Invoke-Native -File dotnet -Arguments @("publish", "$Src\Service\Service.csproj", "-c", "Release", "-r", "win-x64", "--self-contained", "false", "-o", "$Stage\Service")
     Invoke-Native -File dotnet -Arguments @("publish", "$Src\App\App.csproj", "-c", "Release", "-r", "win-x64", "--self-contained", "false", "-o", "$Stage\App")
 
+    if (-not (Test-Path (Join-Path $Stage "App\App.pri"))) { throw "Published app is missing App.pri; installation has not been changed." }
+
     Write-Host "Stopping old version..."
     if ($Watchdog) {
         Disable-ScheduledTask -TaskName "SteamTimerWatchdog" | Out-Null

@@ -1,9 +1,8 @@
 <Window x:Class="App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Steam Timer" Width="480" Height="720" MinWidth="460" MinHeight="360"
-        Background="#EDEDED" WindowStartupLocation="CenterScreen">
-  <ScrollViewer VerticalScrollBarVisibility="Auto">
+        Title="Steam Timer">
+  <ScrollViewer x:Name="Root" VerticalScrollBarVisibility="Auto" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
     <StackPanel Margin="16,18,16,32">
       <!-- Remaining -->
       <Grid Margin="2,4,2,0">
@@ -13,11 +12,11 @@
         </Grid.ColumnDefinitions>
         <TextBlock Text="Remaining:" FontSize="28" VerticalAlignment="Center"/>
         <TextBlock x:Name="RemainingTime" Grid.Column="1" FontFamily="Consolas" FontSize="38" FontWeight="Bold" VerticalAlignment="Center">
-          <Run x:Name="RemH" Text="–"/><Run Text="h" FontSize="20" FontWeight="Normal" Foreground="#777777"/><Run x:Name="RemM" Text="–"/><Run Text="m" FontSize="20" FontWeight="Normal" Foreground="#777777"/><Run x:Name="RemS" Text="–"/><Run Text="s" FontSize="20" FontWeight="Normal" Foreground="#777777"/>
+          <Run x:Name="RemH" Text="–"/><Run Text="h" FontSize="20" FontWeight="Normal" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/><Run x:Name="RemM" Text="–"/><Run Text="m" FontSize="20" FontWeight="Normal" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/><Run x:Name="RemS" Text="–"/><Run Text="s" FontSize="20" FontWeight="Normal" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
         </TextBlock>
       </Grid>
       <TextBlock x:Name="StatusText" Text="Waiting for the service…" TextWrapping="Wrap" Margin="2,8,2,0"/>
-      <TextBlock x:Name="ActionText" TextWrapping="Wrap" Margin="2,4,2,0" Foreground="#555555"/>
+      <TextBlock x:Name="ActionText" TextWrapping="Wrap" Margin="2,4,2,0" Opacity="0.7"/>
 
       <TextBlock Text="Limits:" Style="{StaticResource SectionTitle}"/>
 
@@ -70,8 +69,8 @@
             <TextBlock x:Name="DayMax" Text="—" Style="{StaticResource ScaleLabel}" HorizontalAlignment="Right"/>
           </Grid>
           <StackPanel Margin="0,10,0,0">
-            <TextBlock x:Name="TomorrowText" Text="Tomorrow: —" Foreground="#777777" Margin="0,0,0,6"/>
-            <Button x:Name="BorrowDayBtn" Content="Borrow from tomorrow" IsEnabled="False" ToolTipService.ShowOnDisabled="True" HorizontalAlignment="Right" Padding="14,7,14,7" Background="White" BorderBrush="#D9D9D9" Click="BorrowDay_Click"/>
+            <TextBlock x:Name="TomorrowText" Text="Tomorrow: —" Opacity="0.7" Margin="0,0,0,6"/>
+            <TextBlock x:Name="BorrowDayReason" TextWrapping="Wrap" Opacity="0.7" Margin="0,0,0,6"/><Button x:Name="BorrowDayBtn" Content="Borrow from tomorrow" IsEnabled="False" HorizontalAlignment="Right" Padding="14,7,14,7" Click="BorrowDay_Click"/>
           </StackPanel>
         </StackPanel>
       </Border>
@@ -88,24 +87,24 @@
             <TextBlock x:Name="DotaMax" Text="—" Style="{StaticResource ScaleLabel}" HorizontalAlignment="Right"/>
           </Grid>
           <StackPanel Margin="0,10,0,0">
-            <TextBlock x:Name="NextWeekText" Text="Next week: —" Foreground="#777777" Margin="0,0,0,6"/>
-            <Button x:Name="BorrowDotaBtn" Content="Borrow from next week" IsEnabled="False" ToolTipService.ShowOnDisabled="True" HorizontalAlignment="Right" Padding="14,7,14,7" Background="White" BorderBrush="#D9D9D9" Click="BorrowDota_Click"/>
+            <TextBlock x:Name="NextWeekText" Text="Next week: —" Opacity="0.7" Margin="0,0,0,6"/>
+            <TextBlock x:Name="BorrowDotaReason" TextWrapping="Wrap" Opacity="0.7" Margin="0,0,0,6"/><Button x:Name="BorrowDotaBtn" Content="Borrow from next week" IsEnabled="False" HorizontalAlignment="Right" Padding="14,7,14,7" Click="BorrowDota_Click"/>
           </StackPanel>
         </StackPanel>
       </Border>
 
       <!-- Old controls, hidden in Details -->
-      <Expander Header="Details" Margin="0,12,0,0" IsExpanded="False" Foreground="#777777" FontWeight="SemiBold">
+      <Expander Header="Details" Margin="0,12,0,0" IsExpanded="False" Opacity="0.7" FontWeight="SemiBold">
         <Border Style="{StaticResource Card}" Margin="0,6,0,0">
           <StackPanel>
             <TextBlock x:Name="DetectorText" Text="Detector: —" FontSize="13" Margin="0,0,0,8" TextWrapping="Wrap"/>
-            <WrapPanel>
+            <StackPanel Spacing="4">
               <Button x:Name="RecheckBtn" Content="Recheck now" Padding="10,5,10,5" Margin="0,0,8,8" Click="Recheck_Click"/>
               <Button x:Name="ForceBtn" Content="Force close Steam + games" Padding="10,5,10,5" Margin="0,0,8,8" Click="Force_Click"/>
               <Button x:Name="ResetBtn" Content="Reset view" Padding="10,5,10,5" Margin="0,0,0,8" Click="Reset_Click"/>
-            </WrapPanel>
-            <TextBlock x:Name="TodayDetail" Text="" FontSize="13" Foreground="#777777" TextWrapping="Wrap" Margin="0,0,0,4"/>
-            <TextBlock x:Name="DetectorDetail" Text="" FontSize="13" Foreground="#777777" TextWrapping="Wrap"/>
+            </StackPanel>
+            <TextBlock x:Name="TodayDetail" Text="" FontSize="13" Opacity="0.7" TextWrapping="Wrap" Margin="0,0,0,4"/>
+            <TextBlock x:Name="DetectorDetail" Text="" FontSize="13" Opacity="0.7" TextWrapping="Wrap"/>
           </StackPanel>
         </Border>
       </Expander>

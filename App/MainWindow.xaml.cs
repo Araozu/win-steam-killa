@@ -1,6 +1,8 @@
-using System.Windows;
-using System.Windows.Media;
-using System.Windows.Threading;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Windowing;
+using Windows.Graphics;
 using Shared;
 
 namespace App;
@@ -27,27 +29,28 @@ public partial class MainWindow : Window
         SessTrack.SizeChanged += (_, _) => ApplyFills();
         DayTrack.SizeChanged += (_, _) => ApplyFills();
         DotaTrack.SizeChanged += (_, _) => ApplyFills();
-        Loaded += async (_, _) => await SyncFromServiceAsync();
+        Root.Loaded += async (_, _) => await SyncFromServiceAsync();
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        var dpi = GetDpiForWindow(hwnd) / 96.0;
+        var area = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
+        AppWindow.Resize(new SizeInt32(Math.Min((int)(500 * dpi), area.Width), Math.Min((int)(760 * dpi), area.Height)));
+        if (AppWindow.Presenter is OverlappedPresenter initialPresenter)
+        {
+            initialPresenter.PreferredMinimumWidth = Math.Min((int)(460 * dpi), area.Width);
+            initialPresenter.PreferredMinimumHeight = Math.Min((int)(360 * dpi), area.Height);
+        }
+        AppWindow.Closing += (_, e) => { if (!_allowClose) { e.Cancel = true; AppWindow.Hide(); } };
     }
+
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr hwnd);
 
     public void SetTray(TrayIcon tray) => _tray = tray;
 
-    protected override void OnSourceInitialized(EventArgs e)
-    {
-        base.OnSourceInitialized(e);
-        var screen = System.Windows.Forms.Screen.FromHandle(new System.Windows.Interop.WindowInteropHelper(this).Handle);
-        var transform = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformFromDevice ?? Matrix.Identity;
-        var workArea = transform.Transform(new System.Windows.Vector(screen.WorkingArea.Width, screen.WorkingArea.Height));
-        MinWidth = Math.Min(MinWidth, workArea.X);
-        MinHeight = Math.Min(MinHeight, workArea.Y);
-        Width = Math.Min(Width, workArea.X);
-        Height = Math.Min(Height, workArea.Y);
-    }
-
     public void ShowMain()
     {
-        if (!IsVisible) Show();
-        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        AppWindow.Show();
+        if (AppWindow.Presenter is OverlappedPresenter presenter && presenter.State == OverlappedPresenterState.Minimized) presenter.Restore();
         Activate();
     }
 
@@ -57,18 +60,6 @@ public partial class MainWindow : Window
         _uiTimer.Stop();
         Close();
     }
-
-    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
-    {
-        if (!_allowClose)
-        {
-            e.Cancel = true;
-            Hide();
-            return;
-        }
-        base.OnClosing(e);
-    }
-
     public void UpdateFromStatus(PipeResponse resp, bool keepNote = false)
     {
         if (_allowClose || !_state.Update(resp)) return;
@@ -159,30 +150,22 @@ public partial class MainWindow : Window
     {
         double eff = r.NextBorrowEffectiveness > 0 ? r.NextBorrowEffectiveness : Limits.NextBorrowEffectiveness(r.BorrowCount);
         BorrowDayBtn.Content = $"Borrow 10m from tomorrow ({Limits.FormatEffectiveness(eff)})";
-        BorrowDayBtn.Background = HeatBrush(eff, Limits.BorrowMinEffectiveness);
         TomorrowText.Text = $"Tomorrow: {Hm(TomorrowRemaining(r))}";
         bool sunday = LogicalDay.TryParse(r.LogicalDay, out var day) && day.DayOfWeek == DayOfWeek.Sunday;
         BorrowDayBtn.IsEnabled = !_busy && _state.IsCurrent && !sunday && TomorrowRemaining(r) >= Limits.BorrowCost.TotalSeconds;
-        BorrowDayBtn.ToolTip = sunday ? "Borrow is unavailable on Sundays."
+        string dayReason = sunday ? "Borrow is unavailable on Sundays."
             : TomorrowRemaining(r) < Limits.BorrowCost.TotalSeconds ? "Tomorrow has less than 10m left to borrow."
             : $"Spend 10m of tomorrow for +{Limits.FormatGain(Limits.BorrowGainForNumber(r.BorrowCount + 1))} today. Cooldowns still apply.";
+        ToolTipService.SetToolTip(BorrowDayBtn, dayReason);
+        BorrowDayReason.Text = BorrowDayBtn.IsEnabled ? "" : dayReason;
         double deff = r.NextDotaBorrowEffectiveness > 0 ? r.NextDotaBorrowEffectiveness : Limits.NextDotaBorrowEffectiveness(r.DotaBorrowCount);
         BorrowDotaBtn.Content = $"Borrow 10m from next week ({Limits.FormatEffectiveness(deff)})";
-        BorrowDotaBtn.Background = HeatBrush(deff, Limits.DotaBorrowMinEffectiveness);
         NextWeekText.Text = $"Next week: {Hm(NextWeekDotaRemaining(r))}";
         BorrowDotaBtn.IsEnabled = !_busy && _state.IsCurrent && NextWeekDotaRemaining(r) >= Limits.BorrowCost.TotalSeconds;
-        BorrowDotaBtn.ToolTip = NextWeekDotaRemaining(r) < Limits.BorrowCost.TotalSeconds ? "Next week has less than 10m of Dota left to borrow."
+        string dotaReason = NextWeekDotaRemaining(r) < Limits.BorrowCost.TotalSeconds ? "Next week has less than 10m of Dota left to borrow."
             : $"Spend 10m of next week's Dota budget for +{Limits.FormatGain(Limits.DotaBorrowGainForNumber(r.DotaBorrowCount + 1))} this week.";
-    }
-
-    private static System.Windows.Media.Brush HeatBrush(double eff, double floor)
-    {
-        double t = 1 - (eff - floor) / (Limits.BorrowFirstEffectiveness - floor);
-        t = Math.Clamp(t, 0, 1);
-        byte r = (byte)(255 - 5 * t);
-        byte g = (byte)(255 - 55 * t);
-        byte b = (byte)(255 - 55 * t);
-        return new SolidColorBrush(System.Windows.Media.Color.FromRgb(r, g, b));
+        ToolTipService.SetToolTip(BorrowDotaBtn, dotaReason);
+        BorrowDotaReason.Text = BorrowDotaBtn.IsEnabled ? "" : dotaReason;
     }
 
     private async Task SyncFromServiceAsync()
@@ -268,14 +251,14 @@ public partial class MainWindow : Window
         bool cooling = !r.Enforcing && r.InCooldown && !r.OutsidePlayHours;
         if (r.OutsidePlayHours)
         {
-            SessFill.Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xD9, 0x2F, 0x20));
+            SessFill.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 0xD9, 0x2F, 0x20));
             _sessFrac = 1;
             SessMid.Text = $"back {r.NextPlayAllowedLocal:HH:mm}";
             SessMax.Text = FmtMax(sessionMax);
         }
         else if (r.Enforcing || remaining <= 0)
         {
-            SessFill.Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xD9, 0x2F, 0x20));
+            SessFill.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 0xD9, 0x2F, 0x20));
             _sessFrac = 1;
             SessMid.Text = "blocked";
             SessMax.Text = FmtMax(sessionMax);
@@ -285,21 +268,21 @@ public partial class MainWindow : Window
             double cd = values.CooldownRemaining;
             double total = r.CooldownTotalSeconds > 0 ? r.CooldownTotalSeconds : Limits.CooldownForSession(TimeSpan.FromSeconds(r.LastSessionSeconds)).TotalSeconds;
             if (total <= 0) total = Math.Max(cd, 1);
-            SessFill.Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xD9, 0x2F, 0x20));
+            SessFill.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 0xD9, 0x2F, 0x20));
             _sessFrac = total > 0 ? cd / total : 0;
             SessMid.Text = cd <= 0 ? "ready" : $"cooldown {FormatCooldown(cd)}";
             SessMax.Text = Hm(total);
         }
         else if (r.Running)
         {
-            SessFill.Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xC0, 0x04, 0x64));
+            SessFill.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 0xC0, 0x04, 0x64));
             _sessFrac = sessionMax > 0 ? sessElapsed / sessionMax : 0;
             SessMid.Text = $"{FormatCooldown(sessElapsed)} played";
             SessMax.Text = FmtMax(sessionMax);
         }
         else
         {
-            SessFill.Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xC0, 0x04, 0x64));
+            SessFill.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 0xC0, 0x04, 0x64));
             _sessFrac = 0;
             SessMid.Text = "ready";
             SessMax.Text = FmtMax(sessionMax);
@@ -364,8 +347,8 @@ public partial class MainWindow : Window
         var last = _state.Last;
         string what = last != null && (last.LiveClients.Count > 0 || last.LiveGames.Count > 0 || last.MatchedOrphans.Count > 0)
             ? $"The service currently sees: {DescribeSeen(last)}.\n\n" : "";
-        if (System.Windows.MessageBox.Show(this, $"{what}Force-close Steam + detected games now? This stops the timer immediately (the normal cooldown for the time played still applies).",
-            "Steam Timer — force close", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+        if (System.Windows.Forms.MessageBox.Show( $"{what}Force-close Steam + detected games now? This stops the timer immediately (the normal cooldown for the time played still applies).",
+            "Steam Timer — force close", System.Windows.Forms.MessageBoxButtons.YesNo, System.Windows.Forms.MessageBoxIcon.Warning) != System.Windows.Forms.DialogResult.Yes) return;
         _busy = true; RefreshCountdown();
         try
         {
@@ -382,7 +365,7 @@ public partial class MainWindow : Window
         if (_busy) return;
         if (_state.Last is { } last && LogicalDay.TryParse(last.LogicalDay, out var ld) && ld.DayOfWeek == DayOfWeek.Sunday)
         {
-            System.Windows.MessageBox.Show("Borrow is unavailable on Sundays — enjoy the 4h budget.", "Steam Timer — borrow", MessageBoxButton.OK, MessageBoxImage.Information);
+            System.Windows.Forms.MessageBox.Show("Borrow is unavailable on Sundays — enjoy the 4h budget.", "Steam Timer — borrow", System.Windows.Forms.MessageBoxButtons.OK, System.Windows.Forms.MessageBoxIcon.Information);
             return;
         }
         _busy = true; RefreshCountdown();

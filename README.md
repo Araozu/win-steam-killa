@@ -60,7 +60,7 @@ After the budget is used, kills Steam + games and keeps enforcing until 03:00.
   `Workout:ApiToken` (or `WORKOUT_BASE_URL` / `WORKOUT_API_TOKEN` env visible to
   the service). Settings are loaded beside the service executable; nonblank
   structured settings take precedence over these aliases.
-- `App/` — WPF card window + quiet WinForms tray (`NotifyIcon` tooltip = countdown,
+- `App/` — WinUI 3 Fluent window + quiet WinForms tray (`NotifyIcon` tooltip = countdown,
   balloons only for warnings/kill/cooldown/Dota).
 - `Shared/` — `Limits` (2h session max, len-based cooldown, 30m carryover,
   workout-gated Dota up to 8h/week), `LogicalDay` (03:00 reset), pipe DTOs.
@@ -68,14 +68,15 @@ After the budget is used, kills Steam + games and keeps enforcing until 03:00.
 ## Dev
 
 Install .NET 11 SDK to build the complete solution (WorkoutService targets .NET 11;
-App/Service/Shared target .NET 10). The Windows projects can also be compiled on
-Linux and macOS; the service and tray UI require Windows to run.
+App/Service/Shared target .NET 10). The WinUI app requires Windows to build and run. The service also requires Windows to run.
 
 ```sh
 dotnet build SteamTimer.slnx -c Release
 dotnet test Tests/Tests.csproj -c Release --no-build
 pwsh -NoProfile -File Tests/VerifySetup.ps1
 ```
+
+On Linux or macOS, build `Tests/Tests.csproj` instead of the full solution before running the tests. The WinUI app uses the self-contained Windows App SDK and targets Windows 10 version 1809 or later.
 
 The tests run the production timer engine with a simulated clock/process list,
 and exercise raw capture, authorization, credit-client failures and caching. CI runs

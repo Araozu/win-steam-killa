@@ -1,6 +1,6 @@
 using System.Drawing;
 using System.Windows.Forms;
-using System.Windows.Threading;
+using Microsoft.UI.Xaml;
 using Shared;
 
 namespace App;
@@ -54,13 +54,13 @@ public sealed class TrayIcon : IDisposable
         menu.Items.Add(_dotaBorrowMenuItem);
         menu.Items.Add("Exit tray (timer keeps running, popups stop)", null, (_, _) =>
         {
-            var r = System.Windows.MessageBox.Show(
+            var r = System.Windows.Forms.MessageBox.Show(
                 "Exit the tray? The timer keeps running, but you will NOT get the 15-minute / time-up popups.",
-                "Steam Timer", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning);
-            if (r == System.Windows.MessageBoxResult.Yes)
+                "Steam Timer", System.Windows.Forms.MessageBoxButtons.YesNo, System.Windows.Forms.MessageBoxIcon.Warning);
+            if (r == System.Windows.Forms.DialogResult.Yes)
             {
                 _icon.Visible = false;
-                System.Windows.Application.Current.Shutdown();
+                ((SteamTimerApp)Microsoft.UI.Xaml.Application.Current).Shutdown();
             }
         });
         _icon.ContextMenuStrip = menu;
@@ -240,10 +240,10 @@ public sealed class TrayIcon : IDisposable
     private async Task ForceCloseAsync()
     {
         if (_acting) return;
-        var confirm = System.Windows.MessageBox.Show(
+        var confirm = System.Windows.Forms.MessageBox.Show(
             "Force-close Steam + detected games now? This stops the timer immediately (the normal cooldown for the time played still applies).",
-            "Steam Timer — force close", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning);
-        if (confirm != System.Windows.MessageBoxResult.Yes) return;
+            "Steam Timer — force close", System.Windows.Forms.MessageBoxButtons.YesNo, System.Windows.Forms.MessageBoxIcon.Warning);
+        if (confirm != System.Windows.Forms.DialogResult.Yes) return;
         _acting = true;
         try
         {
