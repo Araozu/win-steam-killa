@@ -14,6 +14,8 @@
         <TextBlock x:Name="RemainingTime" Grid.Column="1" FontFamily="Consolas" FontSize="38" FontWeight="Bold" VerticalAlignment="Center">
           <Run x:Name="RemH" Text="–"/><Run Text="h" FontSize="20" FontWeight="Normal" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/><Run x:Name="RemM" Text="–"/><Run Text="m" FontSize="20" FontWeight="Normal" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/><Run x:Name="RemS" Text="–"/><Run Text="s" FontSize="20" FontWeight="Normal" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
         </TextBlock>
+        <TextBlock x:Name="UnavailableTime" Grid.Column="1" FontSize="32" FontWeight="Bold"
+                   Foreground="#D92F20" VerticalAlignment="Center" Visibility="Collapsed"/>
       </Grid>
       <TextBlock x:Name="StatusText" Text="Waiting for the service…" TextWrapping="Wrap" Margin="2,4,2,0"/>
 

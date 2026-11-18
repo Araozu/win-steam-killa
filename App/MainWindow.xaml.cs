@@ -17,15 +17,11 @@ public partial class MainWindow : Window
     private bool _allowClose;
     private readonly DispatcherTimer _uiTimer = new() { Interval = TimeSpan.FromSeconds(1) };
 
-    private readonly Brush _statusBrush;
-    private readonly Brush _blockedBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 0xD9, 0x2F, 0x20));
-
     private double _todFrac, _sessFrac, _dayFrac, _dotaFrac;
 
     public MainWindow()
     {
         InitializeComponent();
-        _statusBrush = StatusText.Foreground;
         RefreshCountdown();
         _uiTimer.Tick += (_, _) => RefreshCountdown();
         _uiTimer.Start();
@@ -216,7 +212,8 @@ public partial class MainWindow : Window
         if (_allowClose) return;
         ActionText.Text = _lastNote ?? "";
         ActionText.Visibility = string.IsNullOrWhiteSpace(_lastNote) ? Visibility.Collapsed : Visibility.Visible;
-        StatusText.Foreground = _statusBrush;
+        RemainingTime.Visibility = StatusText.Visibility = Visibility.Visible;
+        UnavailableTime.Visibility = Visibility.Collapsed;
         StatusText.Text = !_state.ServiceAvailable
             ? "Service unreachable — is SteamTimer running? Values are last known."
             : _state.Last == null ? "Waiting for the service…"
@@ -249,9 +246,16 @@ public partial class MainWindow : Window
             bool blocked = outsidePlayHours || r.OutsidePlayHours || r.Enforcing || remaining <= 0;
             bool cooling = !blocked && r.InCooldown;
             blocked |= !cooling && values.Playable <= 0;
-            StatusText.Text = blocked ? "Blocked" : cooling ? "On cooldown"
-                : r.Running ? "Playing" : "Ready";
-            if (blocked || cooling) StatusText.Foreground = _blockedBrush;
+            if (blocked || cooling)
+            {
+                UnavailableTime.Text = blocked ? "Blocked" : "On cooldown";
+                UnavailableTime.Visibility = Visibility.Visible;
+                RemainingTime.Visibility = StatusText.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                StatusText.Text = r.Running ? "Playing" : "Ready";
+            }
         }
 
         // ---- Remaining: most restrictive ----
