@@ -3,9 +3,9 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Steam Timer">
   <ScrollViewer x:Name="Root" VerticalScrollBarVisibility="Auto" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
-    <StackPanel Margin="16,18,16,32">
+    <StackPanel Margin="10,10,10,12">
       <!-- Remaining -->
-      <Grid Margin="2,4,2,0">
+      <Grid Margin="2,0,2,0">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="*"/>
           <ColumnDefinition Width="Auto"/>
@@ -15,8 +15,7 @@
           <Run x:Name="RemH" Text="–"/><Run Text="h" FontSize="20" FontWeight="Normal" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/><Run x:Name="RemM" Text="–"/><Run Text="m" FontSize="20" FontWeight="Normal" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/><Run x:Name="RemS" Text="–"/><Run Text="s" FontSize="20" FontWeight="Normal" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
         </TextBlock>
       </Grid>
-      <TextBlock x:Name="StatusText" Text="Waiting for the service…" TextWrapping="Wrap" Margin="2,8,2,0"/>
-      <TextBlock x:Name="ActionText" TextWrapping="Wrap" Margin="2,4,2,0" Opacity="0.7"/>
+      <TextBlock x:Name="StatusText" Text="Waiting for the service…" TextWrapping="Wrap" Margin="2,4,2,0"/>
 
       <TextBlock Text="Limits:" Style="{StaticResource SectionTitle}"/>
 
@@ -24,15 +23,12 @@
       <Border Style="{StaticResource Card}" Margin="0,6,0,0">
         <StackPanel>
           <TextBlock Text="Time of day" Style="{StaticResource CardTitle}"/>
-          <Border x:Name="TodTrack" Height="16" Background="#EFEFEF" CornerRadius="8">
-            <Border x:Name="TodFill" Height="16" CornerRadius="8" Background="#111111" HorizontalAlignment="Left" Width="0"/>
-          </Border>
-          <Grid Margin="0,6,0,0">
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="*"/>
-              <ColumnDefinition Width="*"/>
-              <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
+          <Grid x:Name="TodTrack" Height="12">
+            <Border Background="#EFEFEF" CornerRadius="6"/>
+            <Border x:Name="TodFill" CornerRadius="6" Background="#111111" HorizontalAlignment="Left" Width="0"/>
+            <Border x:Name="TodClosedTrack" CornerRadius="6" Visibility="Collapsed"/>
+          </Grid>
+          <Grid Margin="0,3,0,0">
             <TextBlock x:Name="TodStart" Text="—" Style="{StaticResource ScaleLabel}" HorizontalAlignment="Left"/>
             <TextBlock x:Name="TodNow" Text="—" Style="{StaticResource ScaleLabel}" HorizontalAlignment="Center"/>
             <TextBlock x:Name="TodEnd" Text="—" Style="{StaticResource ScaleLabel}" HorizontalAlignment="Right"/>
@@ -41,14 +37,13 @@
       </Border>
 
       <!-- Session -->
-      <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+      <Border Style="{StaticResource Card}" Margin="0,6,0,0">
         <StackPanel>
           <TextBlock Text="Session length" Style="{StaticResource CardTitle}"/>
-          <TextBlock Text="Max 2h per session" Style="{StaticResource CardSub}"/>
-          <Border x:Name="SessTrack" Height="16" Background="#EFEFEF" CornerRadius="8">
-            <Border x:Name="SessFill" Height="16" CornerRadius="8" Background="#C00464" HorizontalAlignment="Left" Width="0"/>
+          <Border x:Name="SessTrack" Height="12" Background="#EFEFEF" CornerRadius="6">
+            <Border x:Name="SessFill" Height="12" CornerRadius="6" Background="#7145B8" HorizontalAlignment="Left" Width="0"/>
           </Border>
-          <Grid Margin="0,6,0,0">
+          <Grid Margin="0,3,0,0">
             <TextBlock x:Name="SessMid" Text="—" Style="{StaticResource ScaleLabel}" HorizontalAlignment="Center"/>
             <TextBlock x:Name="SessMax" Text="2h" Style="{StaticResource ScaleLabel}" HorizontalAlignment="Right"/>
           </Grid>
@@ -61,40 +56,50 @@
       <Border Style="{StaticResource Card}" Margin="0,6,0,0">
         <StackPanel>
           <TextBlock Text="Daily budget" Style="{StaticResource CardTitle}"/>
-          <Border x:Name="DayTrack" Height="16" Background="#EFEFEF" CornerRadius="8">
-            <Border x:Name="DayFill" Height="16" CornerRadius="8" Background="#1FAA53" HorizontalAlignment="Left" Width="0"/>
+          <Border x:Name="DayTrack" Height="12" Background="#EFEFEF" CornerRadius="6">
+            <Border x:Name="DayFill" Height="12" CornerRadius="6" Background="#1FAA53" HorizontalAlignment="Left" Width="0"/>
           </Border>
-          <Grid Margin="0,6,0,0">
+          <Grid Margin="0,3,0,0">
             <TextBlock x:Name="DayMid" Text="—" Style="{StaticResource ScaleLabel}" HorizontalAlignment="Center"/>
             <TextBlock x:Name="DayMax" Text="—" Style="{StaticResource ScaleLabel}" HorizontalAlignment="Right"/>
           </Grid>
-          <StackPanel Margin="0,10,0,0">
-            <TextBlock x:Name="TomorrowText" Text="Tomorrow: —" Opacity="0.7" Margin="0,0,0,6"/>
-            <TextBlock x:Name="BorrowDayReason" TextWrapping="Wrap" Opacity="0.7" Margin="0,0,0,6"/><Button x:Name="BorrowDayBtn" Content="Borrow from tomorrow" IsEnabled="False" HorizontalAlignment="Right" Padding="14,7,14,7" Click="BorrowDay_Click"/>
-          </StackPanel>
+          <Grid Margin="0,4,0,0" ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock x:Name="TomorrowText" Text="Tomorrow: —" Opacity="0.7" VerticalAlignment="Center"/>
+            <Button x:Name="BorrowDayBtn" Grid.Column="1" Content="Borrow 10m" IsEnabled="False"
+                    Padding="10,4" Click="BorrowDay_Click"/>
+          </Grid>
         </StackPanel>
       </Border>
 
       <!-- Dota -->
-      <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+      <Border Style="{StaticResource Card}" Margin="0,6,0,0">
         <StackPanel>
           <TextBlock Text="Weekly Dota 2 budget" Style="{StaticResource CardTitle}"/>
-          <Border x:Name="DotaTrack" Height="16" Background="#EFEFEF" CornerRadius="8">
-            <Border x:Name="DotaFill" Height="16" CornerRadius="8" Background="#D92D20" HorizontalAlignment="Left" Width="0"/>
+          <Border x:Name="DotaTrack" Height="12" Background="#EFEFEF" CornerRadius="6">
+            <Border x:Name="DotaFill" Height="12" CornerRadius="6" Background="#D92D20" HorizontalAlignment="Left" Width="0"/>
           </Border>
-          <Grid Margin="0,6,0,0">
+          <Grid Margin="0,3,0,0">
             <TextBlock x:Name="DotaMid" Text="—" Style="{StaticResource ScaleLabel}" HorizontalAlignment="Center"/>
             <TextBlock x:Name="DotaMax" Text="—" Style="{StaticResource ScaleLabel}" HorizontalAlignment="Right"/>
           </Grid>
-          <StackPanel Margin="0,10,0,0">
-            <TextBlock x:Name="NextWeekText" Text="Next week: —" Opacity="0.7" Margin="0,0,0,6"/>
-            <TextBlock x:Name="BorrowDotaReason" TextWrapping="Wrap" Opacity="0.7" Margin="0,0,0,6"/><Button x:Name="BorrowDotaBtn" Content="Borrow from next week" IsEnabled="False" HorizontalAlignment="Right" Padding="14,7,14,7" Click="BorrowDota_Click"/>
-          </StackPanel>
+          <Grid Margin="0,4,0,0" ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock x:Name="NextWeekText" Text="Next week: —" Opacity="0.7" VerticalAlignment="Center"/>
+            <Button x:Name="BorrowDotaBtn" Grid.Column="1" Content="Borrow 10m" IsEnabled="False"
+                    Padding="10,4" Click="BorrowDota_Click"/>
+          </Grid>
         </StackPanel>
       </Border>
 
       <!-- Old controls, hidden in Details -->
-      <Expander Header="Details" Margin="0,12,0,0" IsExpanded="False" Opacity="0.7" FontWeight="SemiBold">
+      <Expander Header="Details" Margin="0,6,0,0" IsExpanded="False" Opacity="0.7" FontWeight="SemiBold">
         <Border Style="{StaticResource Card}" Margin="0,6,0,0">
           <StackPanel>
             <TextBlock x:Name="DetectorText" Text="Detector: —" FontSize="13" Margin="0,0,0,8" TextWrapping="Wrap"/>
@@ -103,6 +108,7 @@
               <Button x:Name="ForceBtn" Content="Force close Steam + games" Padding="10,5,10,5" Margin="0,0,8,8" Click="Force_Click"/>
               <Button x:Name="ResetBtn" Content="Reset view" Padding="10,5,10,5" Margin="0,0,0,8" Click="Reset_Click"/>
             </StackPanel>
+            <TextBlock x:Name="ActionText" TextWrapping="Wrap" Margin="0,0,0,4" Visibility="Collapsed"/>
             <TextBlock x:Name="TodayDetail" Text="" FontSize="13" Opacity="0.7" TextWrapping="Wrap" Margin="0,0,0,4"/>
             <TextBlock x:Name="DetectorDetail" Text="" FontSize="13" Opacity="0.7" TextWrapping="Wrap"/>
           </StackPanel>

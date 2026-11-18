@@ -17,15 +17,23 @@ public partial class MainWindow : Window
     private bool _allowClose;
     private readonly DispatcherTimer _uiTimer = new() { Interval = TimeSpan.FromSeconds(1) };
 
+    private readonly Brush _statusBrush;
+    private readonly Brush _blockedBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 0xD9, 0x2F, 0x20));
+
     private double _todFrac, _sessFrac, _dayFrac, _dotaFrac;
 
     public MainWindow()
     {
         InitializeComponent();
+        _statusBrush = StatusText.Foreground;
         RefreshCountdown();
         _uiTimer.Tick += (_, _) => RefreshCountdown();
         _uiTimer.Start();
-        TodTrack.SizeChanged += (_, _) => ApplyFills();
+        TodTrack.SizeChanged += (_, _) =>
+        {
+            UpdateClosedHoursStripes();
+            ApplyFills();
+        };
         SessTrack.SizeChanged += (_, _) => ApplyFills();
         DayTrack.SizeChanged += (_, _) => ApplyFills();
         DotaTrack.SizeChanged += (_, _) => ApplyFills();
@@ -33,7 +41,7 @@ public partial class MainWindow : Window
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         var dpi = GetDpiForWindow(hwnd) / 96.0;
         var area = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
-        AppWindow.Resize(new SizeInt32(Math.Min((int)(500 * dpi), area.Width), Math.Min((int)(760 * dpi), area.Height)));
+        AppWindow.Resize(new SizeInt32(Math.Min((int)(500 * dpi), area.Width), Math.Min((int)(600 * dpi), area.Height)));
         if (AppWindow.Presenter is OverlappedPresenter initialPresenter)
         {
             initialPresenter.PreferredMinimumWidth = Math.Min((int)(460 * dpi), area.Width);
@@ -92,7 +100,7 @@ public partial class MainWindow : Window
         return m == 0 ? $"{h}h" : $"{h}h {m:00}m";
     }
 
-    private static string FormatCooldown(double totalSeconds)
+    private static string FormatDuration(double totalSeconds)
     {
         if (double.IsNaN(totalSeconds) || double.IsInfinity(totalSeconds)) return "—";
         if (totalSeconds <= 0) return "0s";
@@ -131,6 +139,34 @@ public partial class MainWindow : Window
         return Math.Max(0, Limits.DotaWeeklyBudget.TotalSeconds - debt);
     }
 
+    private void UpdateClosedHoursStripes()
+    {
+        // An absolute diagonal gradient keeps the stripe spacing constant when resized.
+        const double stripeStep = 8;
+        double diagonal = TodTrack.ActualWidth + TodTrack.ActualHeight;
+        if (diagonal <= 0) return;
+
+        var stripes = new LinearGradientBrush
+        {
+            MappingMode = BrushMappingMode.Absolute,
+            StartPoint = new Windows.Foundation.Point(0, 0),
+            EndPoint = new Windows.Foundation.Point(diagonal / 2, diagonal / 2)
+        };
+        var red = Windows.UI.Color.FromArgb(255, 0xD9, 0x2F, 0x20);
+        var lightRed = Windows.UI.Color.FromArgb(255, 0xFB, 0xAA, 0xA2);
+        var color = red;
+        stripes.GradientStops.Add(new GradientStop { Color = color, Offset = 0 });
+        for (double position = stripeStep; position < diagonal; position += stripeStep)
+        {
+            double offset = position / diagonal;
+            stripes.GradientStops.Add(new GradientStop { Color = color, Offset = offset });
+            color = color == red ? lightRed : red;
+            stripes.GradientStops.Add(new GradientStop { Color = color, Offset = offset });
+        }
+        stripes.GradientStops.Add(new GradientStop { Color = color, Offset = 1 });
+        TodClosedTrack.Background = stripes;
+    }
+
     private void ApplyFills()
     {
         SetFill(TodTrack, TodFill, _todFrac);
@@ -148,8 +184,6 @@ public partial class MainWindow : Window
 
     private void RefreshBorrowButtons(PipeResponse r)
     {
-        double eff = r.NextBorrowEffectiveness > 0 ? r.NextBorrowEffectiveness : Limits.NextBorrowEffectiveness(r.BorrowCount);
-        BorrowDayBtn.Content = $"Borrow 10m from tomorrow ({Limits.FormatEffectiveness(eff)})";
         TomorrowText.Text = $"Tomorrow: {Hm(TomorrowRemaining(r))}";
         bool sunday = LogicalDay.TryParse(r.LogicalDay, out var day) && day.DayOfWeek == DayOfWeek.Sunday;
         BorrowDayBtn.IsEnabled = !_busy && _state.IsCurrent && !sunday && TomorrowRemaining(r) >= Limits.BorrowCost.TotalSeconds;
@@ -157,15 +191,11 @@ public partial class MainWindow : Window
             : TomorrowRemaining(r) < Limits.BorrowCost.TotalSeconds ? "Tomorrow has less than 10m left to borrow."
             : $"Spend 10m of tomorrow for +{Limits.FormatGain(Limits.BorrowGainForNumber(r.BorrowCount + 1))} today. Cooldowns still apply.";
         ToolTipService.SetToolTip(BorrowDayBtn, dayReason);
-        BorrowDayReason.Text = BorrowDayBtn.IsEnabled ? "" : dayReason;
-        double deff = r.NextDotaBorrowEffectiveness > 0 ? r.NextDotaBorrowEffectiveness : Limits.NextDotaBorrowEffectiveness(r.DotaBorrowCount);
-        BorrowDotaBtn.Content = $"Borrow 10m from next week ({Limits.FormatEffectiveness(deff)})";
         NextWeekText.Text = $"Next week: {Hm(NextWeekDotaRemaining(r))}";
         BorrowDotaBtn.IsEnabled = !_busy && _state.IsCurrent && NextWeekDotaRemaining(r) >= Limits.BorrowCost.TotalSeconds;
         string dotaReason = NextWeekDotaRemaining(r) < Limits.BorrowCost.TotalSeconds ? "Next week has less than 10m of Dota left to borrow."
             : $"Spend 10m of next week's Dota budget for +{Limits.FormatGain(Limits.DotaBorrowGainForNumber(r.DotaBorrowCount + 1))} this week.";
         ToolTipService.SetToolTip(BorrowDotaBtn, dotaReason);
-        BorrowDotaReason.Text = BorrowDotaBtn.IsEnabled ? "" : dotaReason;
     }
 
     private async Task SyncFromServiceAsync()
@@ -185,14 +215,13 @@ public partial class MainWindow : Window
     {
         if (_allowClose) return;
         ActionText.Text = _lastNote ?? "";
+        ActionText.Visibility = string.IsNullOrWhiteSpace(_lastNote) ? Visibility.Collapsed : Visibility.Visible;
+        StatusText.Foreground = _statusBrush;
         StatusText.Text = !_state.ServiceAvailable
             ? "Service unreachable — is SteamTimer running? Values are last known."
             : _state.Last == null ? "Waiting for the service…"
             : !_state.IsCurrent ? "Service status is stale — values are last known."
-            : _state.Last.OutsidePlayHours ? $"Outside play hours — back {_state.Last.NextPlayAllowedLocal:HH:mm}"
-            : _state.Last.Enforcing || _state.Last.RemainingSeconds <= 0 ? "Daily budget used up — blocked until 03:00"
-            : _state.Last.InCooldown ? "Cooldown — Steam blocked between sessions"
-            : _state.Last.Running ? "Playing — timer running" : "Ready — Steam timer paused";
+            : string.Empty;
         RecheckBtn.IsEnabled = ForceBtn.IsEnabled = ResetBtn.IsEnabled = !_busy;
         if (_state.Last == null)
         {
@@ -207,86 +236,52 @@ public partial class MainWindow : Window
         RefreshBorrowButtons(r);
 
         double elapsed = _state.ElapsedSeconds;
-        var values = _state.Project(DateTime.Now);
+        var now = DateTime.Now;
+        var values = _state.Project(now);
         double remaining = values.Remaining, sessElapsed = values.SessionElapsed, dotaRem = values.DotaRemaining;
         double sessionMax = values.SessionMax;
         double dailyMax = Math.Max(0, r.BudgetSeconds);
         double dotaMax = Math.Max(0, r.DotaBudgetSeconds);
 
+        bool outsidePlayHours = !Limits.IsPlayAllowed(now);
+        if (_state.IsCurrent)
+        {
+            bool blocked = outsidePlayHours || r.OutsidePlayHours || r.Enforcing || remaining <= 0;
+            bool cooling = !blocked && r.InCooldown;
+            blocked |= !cooling && values.Playable <= 0;
+            StatusText.Text = blocked ? "Blocked" : cooling ? "On cooldown"
+                : r.Running ? "Playing" : "Ready";
+            if (blocked || cooling) StatusText.Foreground = _blockedBrush;
+        }
+
         // ---- Remaining: most restrictive ----
-        int totalSec = (int)Math.Ceiling(values.Playable);
+        int totalSec = outsidePlayHours ? 0 : (int)Math.Ceiling(values.Playable);
         RemH.Text = _state.IsCurrent ? (totalSec / 3600).ToString("00") : "–";
         RemM.Text = _state.IsCurrent ? ((totalSec % 3600) / 60).ToString("00") : "–";
         RemS.Text = _state.IsCurrent ? (totalSec % 60).ToString("00") : "–";
 
         // ---- Time of day: fills as window elapses ----
-        var now = DateTime.Now;
-        if (Limits.IsWeekend(now.DayOfWeek))
+        TodClosedTrack.Visibility = outsidePlayHours ? Visibility.Visible : Visibility.Collapsed;
+        TodNow.Text = Limits.FormatClock(now);
+        if (Limits.CurrentWindowEndLocal(now) is { } windowEnd)
         {
-            TodStart.Text = "—"; TodNow.Text = now.ToString("HH:mm"); TodEnd.Text = "free";
-            _todFrac = 0;
+            var windowStart = now.Date + (windowEnd.TimeOfDay == Limits.WeekdayWindow1End
+                ? Limits.WeekdayWindow1Start : Limits.WeekdayWindow2Start);
+            TodStart.Text = Limits.FormatClock(windowStart);
+            TodEnd.Text = Limits.FormatClock(windowEnd);
+            _todFrac = (now - windowStart).TotalSeconds / (windowEnd - windowStart).TotalSeconds;
         }
         else
         {
-            var t = now.TimeOfDay;
-            bool in1 = t >= Limits.WeekdayWindow1Start && t < Limits.WeekdayWindow1End;
-            bool in2 = t >= Limits.WeekdayWindow2Start && t < Limits.WeekdayWindow2End;
-            if (in1 || in2)
-            {
-                var s = in1 ? Limits.WeekdayWindow1Start : Limits.WeekdayWindow2Start;
-                var e = in1 ? Limits.WeekdayWindow1End : Limits.WeekdayWindow2End;
-                TodStart.Text = new DateTime().Add(s).ToString("HH:mm");
-                TodEnd.Text = new DateTime().Add(e).ToString("HH:mm");
-                TodNow.Text = now.ToString("HH:mm");
-                _todFrac = (t - s).TotalSeconds / (e - s).TotalSeconds;
-            }
-            else
-            {
-                TodStart.Text = "—"; TodNow.Text = now.ToString("HH:mm"); TodEnd.Text = r.NextPlayAllowedLocal.ToString("HH:mm");
-                _todFrac = 1;
-            }
+            TodStart.Text = "-";
+            TodEnd.Text = outsidePlayHours ? Limits.FormatClock(Limits.NextPlayAllowedLocal(now)) : "free";
+            _todFrac = 0;
         }
 
         // ---- Session: fills with played ----
-        bool cooling = !r.Enforcing && r.InCooldown && !r.OutsidePlayHours;
-        if (r.OutsidePlayHours)
-        {
-            SessFill.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 0xD9, 0x2F, 0x20));
-            _sessFrac = 1;
-            SessMid.Text = $"back {r.NextPlayAllowedLocal:HH:mm}";
-            SessMax.Text = FmtMax(sessionMax);
-        }
-        else if (r.Enforcing || remaining <= 0)
-        {
-            SessFill.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 0xD9, 0x2F, 0x20));
-            _sessFrac = 1;
-            SessMid.Text = "blocked";
-            SessMax.Text = FmtMax(sessionMax);
-        }
-        else if (cooling)
-        {
-            double cd = values.CooldownRemaining;
-            double total = r.CooldownTotalSeconds > 0 ? r.CooldownTotalSeconds : Limits.CooldownForSession(TimeSpan.FromSeconds(r.LastSessionSeconds)).TotalSeconds;
-            if (total <= 0) total = Math.Max(cd, 1);
-            SessFill.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 0xD9, 0x2F, 0x20));
-            _sessFrac = total > 0 ? cd / total : 0;
-            SessMid.Text = cd <= 0 ? "ready" : $"cooldown {FormatCooldown(cd)}";
-            SessMax.Text = Hm(total);
-        }
-        else if (r.Running)
-        {
-            SessFill.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 0xC0, 0x04, 0x64));
-            _sessFrac = sessionMax > 0 ? sessElapsed / sessionMax : 0;
-            SessMid.Text = $"{FormatCooldown(sessElapsed)} played";
-            SessMax.Text = FmtMax(sessionMax);
-        }
-        else
-        {
-            SessFill.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 0xC0, 0x04, 0x64));
-            _sessFrac = 0;
-            SessMid.Text = "ready";
-            SessMax.Text = FmtMax(sessionMax);
-        }
+        _sessFrac = sessionMax > 0 ? sessElapsed / sessionMax : 0;
+        SessMid.Text = $"{FormatDuration(sessElapsed)} played";
+        SessMax.Text = FmtMax(sessionMax);
 
         // ---- Daily allowance: depletes ----
         _dayFrac = dailyMax > 0 ? remaining / dailyMax : 0;
