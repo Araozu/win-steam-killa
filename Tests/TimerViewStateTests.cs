@@ -7,7 +7,7 @@ public sealed class TimerViewStateTests
     private TimerViewState View(PipeResponse response)
     {
         var view = new TimerViewState(_clock);
-        view.Update(response);
+        view.CompleteRequest(view.BeginRequest(), response);
         return view;
     }
 
@@ -109,25 +109,46 @@ public sealed class TimerViewStateTests
     public void FailureImmediatelyInvalidatesCachedStatusAndAFreshResponseRecoversIt()
     {
         var view = View(Status());
-        view.MarkUnavailable();
+        view.CompleteRequest(view.BeginRequest(), null);
         Assert.False(view.IsCurrent);
         Assert.False(view.ServiceAvailable);
         Assert.NotNull(view.Last);
-        view.Update(Status());
+        view.CompleteRequest(view.BeginRequest(), Status());
         Assert.True(view.IsCurrent);
     }
 
     [Fact]
-    public void OlderResponsesCannotRestoreAvailabilityOrResetSnapshotAge()
+    public void OutOfOrderResponsesCannotReplaceNewerResults()
     {
         var view = View(Status());
+        long olderRequest = view.BeginRequest();
+        long newerRequest = view.BeginRequest();
         _clock.Advance(20);
-        view.MarkUnavailable();
-        var old = Status();
-        old.ServerNowUtc = old.ServerNowUtc.AddSeconds(-1);
-        Assert.False(view.Update(old));
+        Assert.True(view.CompleteRequest(newerRequest, null));
+        Assert.False(view.CompleteRequest(olderRequest, Status()));
         Assert.False(view.IsCurrent);
         Assert.Equal(20, view.ElapsedSeconds);
+
+        olderRequest = view.BeginRequest();
+        newerRequest = view.BeginRequest();
+        Assert.True(view.CompleteRequest(newerRequest, Status()));
+        Assert.False(view.CompleteRequest(olderRequest, null));
+        Assert.True(view.IsCurrent);
+    }
+
+    [Fact]
+    public void FreshResponseAfterClockRollbackRestoresStatus()
+    {
+        var status = Status();
+        var view = View(status);
+        _clock.Advance(31);
+        Assert.False(view.IsCurrent);
+
+        var afterRollback = Status();
+        afterRollback.ServerNowUtc = status.ServerNowUtc.AddHours(-1);
+        Assert.True(view.CompleteRequest(view.BeginRequest(), afterRollback));
+        Assert.Same(afterRollback, view.Last);
+        Assert.True(view.IsCurrent);
     }
 
     [Fact]
@@ -142,6 +163,30 @@ public sealed class TimerViewStateTests
         Assert.Equal(15, values.CooldownRemaining);
         Assert.Equal(14400, values.Remaining);
         Assert.Equal(0, values.SessionElapsed);
+    }
+
+    [Fact]
+    public void ElapsedCooldownStaysBlockedUntilServiceConfirmsExpiry()
+    {
+        var cooling = Status();
+        cooling.InCooldown = true;
+        cooling.CooldownRemainingSeconds = 10;
+        var view = View(cooling);
+        _clock.Advance(11);
+
+        var pending = view.Project(_clock.LocalNow);
+        Assert.Equal(0, pending.CooldownRemaining);
+        Assert.Equal(0, pending.Playable);
+
+        view.CompleteRequest(view.BeginRequest(), Status());
+        Assert.Equal(7200, view.Project(_clock.LocalNow).Playable);
+    }
+
+    [Fact]
+    public void BorrowLabelsDistinguishCostFromActualGain()
+    {
+        Assert.Equal("Borrow 10m from tomorrow (+9m 30s today)", Limits.BorrowButtonText(0));
+        Assert.Equal("Borrow 10m from next week (+5m this week)", Limits.DotaBorrowButtonText(20));
     }
 
     [Fact]

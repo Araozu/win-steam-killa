@@ -7,22 +7,30 @@ internal sealed class TimerViewState(TimeProvider? clock = null)
 {
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
     private long _receivedAt;
+    private long _nextRequest;
+    private long _lastCompletedRequest;
 
     public PipeResponse? Last { get; private set; }
     public bool ServiceAvailable { get; private set; } = true;
     public double ElapsedSeconds => Last == null ? 0 : Math.Max(0, _clock.GetElapsedTime(_receivedAt).TotalSeconds);
     public bool IsCurrent => ServiceAvailable && Last != null && ElapsedSeconds <= 30;
 
-    public bool Update(PipeResponse response)
+    public long BeginRequest() => ++_nextRequest;
+
+    // Requests are ordered by the client, so service restarts and clock changes
+    // cannot make a fresh response look older than the current snapshot.
+    public bool CompleteRequest(long request, PipeResponse? response)
     {
-        if (Last != null && response.ServerNowUtc < Last.ServerNowUtc) return false;
-        Last = response;
-        _receivedAt = _clock.GetTimestamp();
-        ServiceAvailable = true;
+        if (request <= _lastCompletedRequest) return false;
+        _lastCompletedRequest = request;
+        ServiceAvailable = response != null;
+        if (response != null)
+        {
+            Last = response;
+            _receivedAt = _clock.GetTimestamp();
+        }
         return true;
     }
-
-    public void MarkUnavailable() => ServiceAvailable = false;
 
     public TimerValues Project(DateTime localNow)
     {

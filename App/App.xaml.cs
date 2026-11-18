@@ -26,7 +26,7 @@ public partial class SteamTimerApp : System.Windows.Application
         _main = new MainWindow();
         _tray = new TrayIcon(
             showMain: () => Dispatcher.Invoke(() => _main.ShowMain()),
-            getWindow: () => _main);
+            window: _main);
         _main.SetTray(_tray);
         _main.Show();
 

@@ -82,7 +82,7 @@ public static class Limits
     }
 
     public static string BorrowButtonText(int borrowCountSoFar) =>
-        $"+10m from tomorrow ({FormatEffectiveness(NextBorrowEffectiveness(borrowCountSoFar))} effective)";
+        $"Borrow 10m from tomorrow (+{FormatGain(BorrowGainForNumber(borrowCountSoFar + 1))} today)";
 
     // 1-indexed press number this week (1 = first Dota borrow). Same decay as
     // daily borrow, floored at 50%: 95%, 88%, 80%, 71%, 61%, 50%, 50%, ...
@@ -106,7 +106,7 @@ public static class Limits
         EffectivenessForDotaBorrowNumber(borrowCountSoFar + 1);
 
     public static string DotaBorrowButtonText(int borrowCountSoFar) =>
-        $"+10m from next week ({FormatEffectiveness(NextDotaBorrowEffectiveness(borrowCountSoFar))} effective)";
+        $"Borrow 10m from next week (+{FormatGain(DotaBorrowGainForNumber(borrowCountSoFar + 1))} this week)";
     // Day resets at 03:00 local time.
     public const int ResetHourLocal = 3;
     public const string PipeName = "steamtimer";

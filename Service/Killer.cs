@@ -48,6 +48,7 @@ public static class Killer
             try
             {
                 var parentOf = BuildParentMap();
+                var startTime = ProcessStartTimes(all);
                 var steamRoots = new HashSet<int>(
                     all.Where(p => IsSteamName(SafeName(p)) || IsDotaName(SafeName(p))).Select(SafeId).Where(id => id > 0));
 
@@ -62,14 +63,14 @@ public static class Killer
                 {
                     int id = SafeId(p);
                     if (id <= 0) continue;
-                    if (steamRoots.Contains(id) || HasSteamAncestor(id, steamRoots, parentOf))
+                    if (steamRoots.Contains(id) || HasPlayAncestor(id, steamRoots, parentOf, startTime))
                         targets.Add(p);
                     else if (extra.Count > 0 && extra.Contains(SafeName(p))
                         && knownPaths.TryGetValue(SafeName(p), out var paths)
                         && paths.Contains(SafePath(p), StringComparer.OrdinalIgnoreCase))
                         targets.Add(p);
                 }
-                return KillTargets(targets, parentOf, log);
+                return KillTargets(targets, parentOf, startTime, log);
             }
             finally { foreach (var p in all) try { p.Dispose(); } catch { } }
         }
@@ -86,6 +87,7 @@ public static class Killer
             try
             {
                 var parentOf = BuildParentMap();
+                var startTime = ProcessStartTimes(all);
                 var dotaRoots = new HashSet<int>(
                     all.Where(p => IsDotaName(SafeName(p))).Select(SafeId).Where(id => id > 0));
                 if (dotaRoots.Count == 0) return 0;
@@ -94,10 +96,10 @@ public static class Killer
                 {
                     int id = SafeId(p);
                     if (id <= 0) continue;
-                    if (dotaRoots.Contains(id) || HasSteamAncestor(id, dotaRoots, parentOf))
+                    if (dotaRoots.Contains(id) || HasPlayAncestor(id, dotaRoots, parentOf, startTime))
                         targets.Add(p);
                 }
-                return KillTargets(targets, parentOf, log);
+                return KillTargets(targets, parentOf, startTime, log);
             }
             finally { foreach (var p in all) try { p.Dispose(); } catch { } }
         }
@@ -105,8 +107,11 @@ public static class Killer
     }
 
     // Shared graceful-close then kill, leaves (games) first, roots last.
-    private static int KillTargets(List<Process> targets, Dictionary<int, int> parentOf, ILogger? log)
+    private static int KillTargets(List<Process> targets, Dictionary<int, int> parentOf,
+        Func<int, DateTime?> startTime, ILogger? log)
     {
+        // Keep each verified process handle open until the shutdown pass ends.
+        targets.RemoveAll(p => !TryPinTarget(p, startTime(p.Id)));
         int killed = 0;
         if (targets.Count == 0) return 0;
         targets.Sort((a, b) =>
@@ -128,7 +133,6 @@ public static class Killer
         {
             try
             {
-                p.Refresh();
                 if (!p.HasExited)
                 {
                     p.Kill(entireProcessTree: false);
@@ -191,6 +195,7 @@ public static class Killer
             try
             {
                 var parentOf = BuildParentMap();
+                var startTime = ProcessStartTimes(all);
                 var clientRoots = new HashSet<int>(
                     all.Where(p => IsClientName(SafeName(p))).Select(SafeId).Where(id => id > 0));
                 foreach (var p in all.Where(p => IsClientName(SafeName(p))).Take(20))
@@ -205,7 +210,7 @@ public static class Killer
                 {
                     int id = SafeId(p);
                     if (id <= 0 || clientRoots.Contains(id)) continue;
-                    if (HasSteamAncestor(id, clientRoots, parentOf))
+                    if (HasPlayAncestor(id, clientRoots, parentOf, startTime))
                     {
                         string n = SafeName(p);
                         if (!string.IsNullOrEmpty(n) && !IsClientName(n) && !IsSteamName(n))
@@ -299,14 +304,54 @@ public static class Killer
         try { return p.MainModule?.FileName ?? ""; } catch { return ""; }
     }
 
-    private static bool HasSteamAncestor(int pid, HashSet<int> roots, Dictionary<int, int> parentOf)
+    private static DateTime? StartTimeUtc(Process process)
     {
-        var seen = new HashSet<int>();
-        int cur = pid;
-        while (parentOf.TryGetValue(cur, out int parent) && parent > 0 && seen.Add(cur))
+        try { return process.StartTime.ToUniversalTime(); }
+        catch { return null; }
+    }
+
+    private static Func<int, DateTime?> ProcessStartTimes(IEnumerable<Process> processes)
+    {
+        var byId = processes.ToDictionary(p => p.Id);
+        var cached = new Dictionary<int, DateTime?>();
+        return id =>
         {
+            if (!cached.TryGetValue(id, out var started))
+            {
+                started = byId.TryGetValue(id, out var process) ? StartTimeUtc(process) : null;
+                cached[id] = started;
+            }
+            return started;
+        };
+    }
+
+    private static bool TryPinTarget(Process process, DateTime? expectedStart)
+    {
+        if (expectedStart == null) return false;
+        try
+        {
+            string expectedName = process.ProcessName;
+            process.Refresh();
+            _ = process.SafeHandle;
+            return StartTimeUtc(process) == expectedStart
+                && string.Equals(process.ProcessName, expectedName, StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
+    }
+
+    internal static bool HasPlayAncestor(int pid, HashSet<int> roots, Dictionary<int, int> parentOf,
+        Func<int, DateTime?> startTime)
+    {
+        int child = pid;
+        while (parentOf.TryGetValue(child, out int parent) && parent > 0)
+        {
+            // Toolhelp records the original parent PID. A live process with a
+            // reused PID cannot have started before the child it claims.
+            if (startTime(parent) is not { } parentStarted || startTime(child) is not { } childStarted
+                || parentStarted >= childStarted)
+                return false;
             if (roots.Contains(parent)) return true;
-            cur = parent;
+            child = parent;
         }
         return false;
     }

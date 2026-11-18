@@ -13,12 +13,11 @@ public sealed class TrayIcon : IDisposable
     private readonly NotifyIcon _icon = new();
     private readonly DispatcherTimer _poll = new() { Interval = TimeSpan.FromSeconds(15) };
     private readonly Action _showMain;
-    private readonly Func<MainWindow?> _getWindow;
+    private readonly MainWindow _window;
     private readonly ToolStripMenuItem _borrowMenuItem;
     private readonly ToolStripMenuItem _dotaBorrowMenuItem;
     private bool _polling;
     private bool _disposed;
-    private bool _acting;
     private string? _seenDay;
     private bool _warned;
     private bool _enforceTold;
@@ -35,22 +34,22 @@ public sealed class TrayIcon : IDisposable
     private string? _seenWindowKey;
     private bool _windowTold;
 
-    public TrayIcon(Action showMain, Func<MainWindow?> getWindow)
+    public TrayIcon(Action showMain, MainWindow window)
     {
         _showMain = showMain;
-        _getWindow = getWindow;
+        _window = window;
         _icon.Icon = SystemIcons.Shield;
         _icon.Text = "Steam Timer";
         _icon.Visible = true;
-        var menu = new ContextMenuStrip();
+        var menu = new ContextMenuStrip { ShowItemToolTips = true };
         menu.Items.Add("Open", null, (_, _) => _showMain());
-        menu.Items.Add("Recheck now (ask service what is open)", null, async (_, _) => await RecheckAsync());
-        menu.Items.Add("Force close Steam + games (stop timer)", null, async (_, _) => await ForceCloseAsync());
-        _borrowMenuItem = new ToolStripMenuItem(Limits.BorrowButtonText(0));
-        _borrowMenuItem.Click += async (_, _) => await BorrowAsync();
+        menu.Items.Add("Recheck now (ask service what is open)", null, async (_, _) => await _window.RecheckAsync(notify: true));
+        menu.Items.Add("Force close Steam + games (stop timer)", null, async (_, _) => await _window.ForceCloseAsync(notify: true));
+        _borrowMenuItem = new ToolStripMenuItem("Borrow from tomorrow") { Enabled = false };
+        _borrowMenuItem.Click += async (_, _) => await _window.BorrowAsync(dota: false, notify: true);
         menu.Items.Add(_borrowMenuItem);
-        _dotaBorrowMenuItem = new ToolStripMenuItem(Limits.DotaBorrowButtonText(0));
-        _dotaBorrowMenuItem.Click += async (_, _) => await BorrowDotaAsync();
+        _dotaBorrowMenuItem = new ToolStripMenuItem("Borrow from next week") { Enabled = false };
+        _dotaBorrowMenuItem.Click += async (_, _) => await _window.BorrowAsync(dota: true, notify: true);
         menu.Items.Add(_dotaBorrowMenuItem);
         menu.Items.Add("Exit tray (timer keeps running, popups stop)", null, (_, _) =>
         {
@@ -90,7 +89,7 @@ public sealed class TrayIcon : IDisposable
     }
 
     // Called by MainWindow.RefreshCountdown for the live tooltip (no balloons here).
-    public void SetStateFromWindow(PipeResponse r, double remaining, double elapsed)
+    public void SetStateFromWindow(PipeResponse r, double remaining, double cooldownLeft)
     {
         if (_disposed) return;
         if (r.OutsidePlayHours)
@@ -98,7 +97,10 @@ public sealed class TrayIcon : IDisposable
         else if (r.Enforcing || remaining <= 0)
             SetState("Steam blocked until 03:00", TimeSpan.Zero);
         else if (r.InCooldown)
-            SetState($"Cooldown: {Hm(Math.Max(0, r.CooldownRemainingSeconds - elapsed))} left", TimeSpan.Zero);
+        {
+            SetState(cooldownLeft > 0 ? $"Cooldown: {Limits.FormatHm(TimeSpan.FromSeconds(cooldownLeft))} left"
+                : "Checking cooldown with the service…", TimeSpan.Zero);
+        }
         else
         {
             var left = TimeSpan.FromSeconds(remaining);
@@ -109,6 +111,15 @@ public sealed class TrayIcon : IDisposable
         }
     }
 
+    internal void SetBorrowOffer(bool dota, string label, bool enabled, string tooltip)
+    {
+        if (_disposed) return;
+        var item = dota ? _dotaBorrowMenuItem : _borrowMenuItem;
+        item.Text = label;
+        item.Enabled = enabled;
+        item.ToolTipText = tooltip;
+    }
+
     public void Balloon(string title, string body)
     {
         try { _icon.ShowBalloonTip(8000, title, body, ToolTipIcon.Warning); } catch { }
@@ -116,21 +127,17 @@ public sealed class TrayIcon : IDisposable
 
     private async Task PollAsync()
     {
-        if (_polling || _disposed) return;
+        if (_polling || _disposed || _window.ActionInProgress) return;
         _polling = true;
         try
         {
-            var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "status" });
-            if (_disposed) return;
+            var (resp, applied) = await _window.SendToServiceAsync("status");
+            if (_disposed || !applied) return;
             if (resp == null || !resp.Ok)
             {
-                _getWindow()?.MarkServiceUnavailable();
                 SetState("Service unreachable — is SteamTimer running?", null);
                 return;
             }
-            try { _getWindow()?.UpdateFromStatus(resp); } catch { }
-            try { _borrowMenuItem.Text = Limits.BorrowButtonText(resp.BorrowCount); } catch { }
-            try { _dotaBorrowMenuItem.Text = Limits.DotaBorrowButtonText(resp.DotaBorrowCount); } catch { }
             if (resp.LogicalDay != _seenDay)
             {
                 _seenDay = resp.LogicalDay;
@@ -163,8 +170,7 @@ public sealed class TrayIcon : IDisposable
             }
             if (resp.InCooldown)
             {
-                SetState($"Cooldown: {Hm(resp.CooldownRemainingSeconds)} left", TimeSpan.Zero);
-                var key = resp.LogicalDay + "|cd|" + resp.CooldownUntilUtc.Ticks;
+                var key = resp.CooldownUntilUtc.Ticks.ToString();
                 if (key != _seenCooldownKey) { _seenCooldownKey = key; _cooldownTold = false; }
                 if (!_cooldownTold)
                 {
@@ -221,68 +227,6 @@ public sealed class TrayIcon : IDisposable
         }
         catch { }
         finally { _polling = false; }
-    }
-
-    private async Task RecheckAsync()
-    {
-        if (_acting) return;
-        _acting = true;
-        try
-        {
-            var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "recheck" });
-            if (resp == null || !resp.Ok) { Balloon("Recheck failed", "Service unreachable. Is SteamTimer running?"); return; }
-            try { _getWindow()?.UpdateFromStatus(resp); } catch { }
-            Balloon("Recheck", string.IsNullOrWhiteSpace(resp.ActionNote) ? "Done." : resp.ActionNote);
-        }
-        finally { _acting = false; }
-    }
-
-    private async Task ForceCloseAsync()
-    {
-        if (_acting) return;
-        var confirm = System.Windows.MessageBox.Show(
-            "Force-close Steam + detected games now? This stops the timer immediately (the normal cooldown for the time played still applies).",
-            "Steam Timer — force close", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning);
-        if (confirm != System.Windows.MessageBoxResult.Yes) return;
-        _acting = true;
-        try
-        {
-            var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "kill" }, timeoutMs: 15000);
-            if (resp == null || !resp.Ok) { Balloon("Force-close failed", "Service unreachable. Is SteamTimer running?"); return; }
-            try { _getWindow()?.UpdateFromStatus(resp); } catch { }
-            Balloon("Force close", string.IsNullOrWhiteSpace(resp.ActionNote) ? $"Closed {resp.KilledProcesses} process(es)." : resp.ActionNote);
-        }
-        finally { _acting = false; }
-    }
-
-    private async Task BorrowAsync()
-    {
-        if (_acting) return;
-        _acting = true;
-        try
-        {
-            var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "borrow" }, timeoutMs: 15000);
-            if (resp == null) { Balloon("Borrow failed", "Service unreachable. Is SteamTimer running?"); return; }
-            if (!resp.Ok) { Balloon("Borrow unavailable", resp.Error); try { _getWindow()?.UpdateFromStatus(resp); } catch { } return; }
-            try { _getWindow()?.UpdateFromStatus(resp); } catch { }
-            try { _borrowMenuItem.Text = Limits.BorrowButtonText(resp.BorrowCount); } catch { }
-        }
-        finally { _acting = false; }
-    }
-
-    private async Task BorrowDotaAsync()
-    {
-        if (_acting) return;
-        _acting = true;
-        try
-        {
-            var resp = await PipeClient.SendAsync(new PipeRequest { Cmd = "borrowdota" }, timeoutMs: 15000);
-            if (resp == null) { Balloon("Dota borrow failed", "Service unreachable. Is SteamTimer running?"); return; }
-            if (!resp.Ok) { Balloon("Dota borrow unavailable", resp.Error); try { _getWindow()?.UpdateFromStatus(resp); } catch { } return; }
-            try { _getWindow()?.UpdateFromStatus(resp); } catch { }
-            try { _dotaBorrowMenuItem.Text = Limits.DotaBorrowButtonText(resp.DotaBorrowCount); } catch { }
-        }
-        finally { _acting = false; }
     }
 
     public void Dispose()

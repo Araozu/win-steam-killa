@@ -193,6 +193,129 @@ public sealed class TimerEngineTests : IDisposable
     }
 
     [Fact]
+    public void OvernightSessionStillHitsItsLimitAtDailyReset()
+    {
+        _now = new DateTime(2026, 11, 15, 2, 59, 45, DateTimeKind.Local).ToUniversalTime();
+        // The logical day is still Saturday before 03:00.
+        var state = Seed(used: 7185, session: 7185, running: true);
+        state.BaseBudgetSeconds = 9000;
+        _store.Save(state);
+        _processes.Playing = true;
+        var engine = Engine();
+
+        // Even a status request can observe the rollover before the next tick.
+        _now = _now.AddSeconds(15);
+        var status = Status(engine);
+        Assert.Equal("2026-11-15", status.LogicalDay);
+        Assert.Equal(7200, status.SessionElapsedSeconds);
+        Assert.Equal(0, status.UsedSeconds);
+
+        engine.Tick(NullLogger.Instance);
+        status = Status(engine);
+        Assert.Equal(1, _processes.PlayKills);
+        Assert.Equal(7200, status.CooldownRemainingSeconds);
+        Assert.False(status.Running);
+    }
+
+    [Fact]
+    public void TickAcrossResetSplitsDailyUsageWithoutResettingSession()
+    {
+        _now = new DateTime(2026, 11, 15, 2, 59, 50, DateTimeKind.Local).ToUniversalTime();
+        var state = Seed(used: 7190, session: 1800, running: true);
+        state.BaseBudgetSeconds = 9000;
+        _store.Save(state);
+        _processes.Playing = true;
+        var engine = Engine();
+
+        Tick(engine);
+        var status = Status(engine);
+        Assert.Equal(1800, status.CarryInSeconds);
+        Assert.Equal(1815, status.SessionElapsedSeconds);
+        Assert.Equal(5, status.UsedSeconds);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CooldownSurvivesDailyResetAndRestart(bool restart)
+    {
+        _now = new DateTime(2026, 11, 15, 2, 59, 45, DateTimeKind.Local).ToUniversalTime();
+        var state = Seed(used: 3600);
+        state.CooldownUntilUtc = _now.AddMinutes(40);
+        state.LastSessionSeconds = 3600;
+        _store.Save(state);
+        var engine = Engine();
+        _processes.Playing = true;
+
+        _now = _now.AddSeconds(15);
+        if (restart) engine = Engine();
+        engine.Tick(NullLogger.Instance);
+        var status = Status(engine);
+        Assert.Equal("2026-11-15", status.LogicalDay);
+        Assert.Equal(2385, status.CooldownRemainingSeconds);
+        Assert.Equal(3600, status.CooldownTotalSeconds);
+        Assert.Equal(1, _processes.PlayKills);
+        Assert.False(status.Running);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void UnwritableStateDoesNotPreventEnforcingLimits(bool dailyLimit)
+    {
+        Seed(used: dailyLimit ? 8990 : 7190, session: dailyLimit ? 590 : 7190, running: true);
+        _processes.Playing = true;
+        var engine = Engine();
+        Directory.CreateDirectory(Path.Combine(_dir, "state.json.tmp"));
+
+        Tick(engine);
+        Assert.Equal(1, _processes.PlayKills);
+        var status = Status(engine);
+        Assert.Equal(dailyLimit, status.Enforcing);
+        Assert.True(status.InCooldown);
+
+        var borrow = engine.Handle(new() { Cmd = "borrow" });
+        Assert.False(borrow.Ok);
+        Assert.Equal(0, borrow.BorrowCount);
+        Assert.Equal(0, borrow.BorrowedSeconds);
+    }
+
+    [Fact]
+    public void CooldownExpiryDoesNotSkipEnforcement()
+    {
+        var state = Seed(used: 9000);
+        state.CooldownUntilUtc = _now.AddSeconds(15);
+        state.LastSessionSeconds = 600;
+        _store.Save(state);
+        var engine = Engine();
+        _processes.Playing = true;
+
+        Tick(engine);
+        Assert.Equal(1, _processes.PlayKills);
+        Assert.False(Status(engine).InCooldown);
+    }
+
+    [Fact]
+    public void ProcessAncestryRejectsReusedAndUnknownParentIdentities()
+    {
+        Dictionary<int, int> parents = new() { [100] = 200, [200] = 300 };
+        HashSet<int> roots = [300];
+        Dictionary<int, DateTime> started = new()
+        {
+            [100] = _now,
+            [200] = _now.AddSeconds(-1),
+            [300] = _now.AddSeconds(-2),
+        };
+        DateTime? StartTime(int pid) => started.TryGetValue(pid, out var time) ? time : null;
+
+        Assert.True(Killer.HasPlayAncestor(100, roots, parents, StartTime));
+        started[200] = _now.AddSeconds(1);
+        Assert.False(Killer.HasPlayAncestor(100, roots, parents, StartTime));
+        started.Remove(200);
+        Assert.False(Killer.HasPlayAncestor(100, roots, parents, StartTime));
+    }
+
+    [Fact]
     public void WeeklyRolloverAppliesDotaDebtAndResetsUsage()
     {
         var state = Seed();
