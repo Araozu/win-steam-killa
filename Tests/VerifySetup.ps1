@@ -19,10 +19,20 @@ $Install = (Get-Content "$Repo/Setup/install.ps1" -Raw) -replace '(?m)^#Requires
 $SetupPath = Join-Path $Repo 'Setup'
 $Install = $Install.Replace('$PSScriptRoot', '$SetupPath')
 $FailedAsExpected = $false
+$PreviousExitCode = Get-Variable -Name LASTEXITCODE -Scope Global -ValueOnly -ErrorAction SilentlyContinue
 try { & ([scriptblock]::Create($Install)) }
 catch {
     if ($_.Exception.Message -notlike '*dotnet failed with exit code 42*') { throw }
     $FailedAsExpected = $true
+}
+finally {
+    # The Actions PowerShell wrapper forwards LASTEXITCODE to the runner.
+    if ($null -eq $PreviousExitCode) {
+        Remove-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+    }
+    else {
+        $global:LASTEXITCODE = $PreviousExitCode
+    }
 }
 if (-not $FailedAsExpected) { throw 'Installer ignored a failed publish.' }
 if ($PublishArguments.Count -ne 10 -or $PublishArguments[0] -ne 'publish' -or $PublishArguments[2] -ne '-c') {

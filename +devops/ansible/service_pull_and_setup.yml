@@ -1,5 +1,5 @@
 ---
-- name: Pulls docker image and writes necessary .version file
+- name: Checks the local workout image and writes its version file
   become: false
   hosts: all
   vars:
@@ -11,6 +11,10 @@
     project_stage: '{{ _project_stage }}'
 
   tasks:
+    - name: Verify the build image is available to the deployment Docker daemon
+      command: docker image inspect {{ full_registry_url }}:{{ image_tag }} --format '{% raw %}{{.Id}}{% endraw %}'
+      changed_when: false
+
     - name: Create .version file
       copy:
         content: |

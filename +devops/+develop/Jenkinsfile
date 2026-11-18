@@ -1,5 +1,6 @@
 pipeline {
-    agent any
+    // Ansible deploys to localhost and Compose uses the image built on this host.
+    agent { label 'fernando-helsinki-01' }
     environment {
         BUILD_REF = sh(script: "echo -n '${BUILD_TAG}' | sha256sum | cut -c1-12", returnStdout: true).trim()
 
@@ -35,12 +36,12 @@ ungrouped:
                 }
             }
         }
-        stage("Build & Push") {
+        stage("Prepare deployment") {
             parallel {
-                stage("Build & Push") {
+                stage("Build workout image") {
                     steps {
                         script {
-                            def img = docker.build("${FULL_REGISTRY_URL}:${BUILD_REF}", "-f +devops/docker/Dockerfile .")
+                            docker.build("${FULL_REGISTRY_URL}:${BUILD_REF}", "-f +devops/docker/Dockerfile .")
                         }
                     }
                 }
@@ -62,7 +63,7 @@ ungrouped:
                 }
             }
         }
-        stage("Fetch image at server") {
+        stage("Configure deployment image") {
             steps {
                 dir ("+devops/+$PROJECT_STAGE") {
                     ansiblePlaybook(
