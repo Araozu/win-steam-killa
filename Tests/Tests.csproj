@@ -17,10 +17,13 @@
     <Compile Include="../Service/TimerEngine.cs" Link="Service/TimerEngine.cs" />
     <Compile Include="../Service/StateStore.cs" Link="Service/StateStore.cs" />
     <Compile Include="../Service/WorkoutCreditSource.cs" Link="Service/WorkoutCreditSource.cs" />
+    <Compile Include="../Service/WorkoutDataSync.cs" Link="Service/WorkoutDataSync.cs" />
+    <Compile Include="../Service/WorkoutArchive.cs" Link="Service/WorkoutArchive.cs" />
     <Compile Include="../Service/WorkoutConnectionSettings.cs" Link="Service/WorkoutConnectionSettings.cs" />
     <Compile Include="../Service/WorkoutSyncWorker.cs" Link="Service/WorkoutSyncWorker.cs" />
     <Compile Include="../Service/Killer.cs" Link="Service/Killer.cs" />
     <Compile Include="../Service/PlayProcesses.cs" Link="Service/PlayProcesses.cs" />
+    <Compile Include="../App/TimerViewState.cs" Link="App/TimerViewState.cs" />
     <Using Include="Microsoft.Extensions.Logging" />
     <Using Include="Xunit" />
   </ItemGroup>

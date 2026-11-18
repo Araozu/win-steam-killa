@@ -1,6 +1,7 @@
 services:
   {{ project_name }}-workout-{{ project_stage }}:
     image: ${{ project_name | upper }}_WORKOUT_REGISTRY_URL:${{ project_name | upper }}_WORKOUT_VERSION
+    pull_policy: never
     container_name: {{ project_name }}-workout-{{ project_stage }}
     restart: unless-stopped
     environment:
