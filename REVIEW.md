@@ -26,16 +26,13 @@ setup-script checks, and Windows x64 app publishing. WPF rendering, high DPI,
 tray interaction, second-instance activation, and Windows session shutdown still
 need an interactive Windows smoke test; Linux compilation cannot exercise them.
 
-## Notify/Tasker capture-stage review (2026-11-16)
+## Workout capture
 
-Strava integration and OAuth are removed. `WorkoutService` is a toy authenticated
-raw-body capture server, with atomic per-request JSON files under
-`DATA_DIR/captures`. No workout payload schema or duration conversion is assumed.
-Unknown content types, invalid JSON and binary input are preserved for analysis;
-request bodies are limited to 256 KiB. Credential headers and query strings are
-excluded from capture metadata. `WORKOUT_PIPELINE.md` documents the flow, local
-probe, deployment inputs, hardware cases and the decisions deferred until samples
-exist. `/api/credit` returns HTTP 503 rather than erasing cached timer credit.
+`WorkoutService` captures authorized Health Connect Webhook uploads into atomic
+JSON files under `DATA_DIR/captures`. Requests are limited to 256 KiB. Capture
+metadata omits credential headers and query strings. `WORKOUT_PIPELINE.md`
+documents the captured Simple Health records and how the PC links and acknowledges them.
+The Windows service calculates credit from locally saved workouts.
 
 Additional client/enforcement fixes from this review:
 
@@ -43,7 +40,7 @@ Additional client/enforcement fixes from this review:
   The host explicitly loads configuration from beside the executable.
 - Workout polling runs in a separate hosted worker; sequential HTTP requests and
   timeouts cannot pause the 15-second enforcement loop.
-- HTTP timeouts and malformed credit responses preserve cached credit;
+- HTTP timeouts and malformed workout feeds preserve cached credit;
   unconfigured sources do not claim a successful sync or overwrite that cache.
   Shutdown cancellation still propagates.
 - A downward workout-credit correction no longer reduces already-consumed Dota
@@ -51,16 +48,12 @@ Additional client/enforcement fixes from this review:
 
 Verification: Release solution build passes with zero warnings/errors; 49 tests
 pass, including raw capture formats, auth, missing tokens, concurrent uploads,
-known/unknown-length size limits, removed OAuth routes, unavailable credit,
+known/unknown-length size limits, unavailable credit,
 configuration fallback, HTTP response validation, timeout/cache behavior,
 enforcement during a pending sync and consumption after a credit correction.
-Setup-script checks pass. No hardware, VPS deployment, or live Steam validation
-is claimed; production credit mapping is intentionally deferred.
+Setup-script checks pass.
 
-## Historical review before the capture-stage replacement
-
-The notes below describe the previous Strava implementation and its verification,
-not the current capture server. The current pipeline is described above.
+## Earlier timer and deployment review
 
 Reviewed all tracked application, service, shared-policy, workout API, setup,
 deployment, and demo sources. Existing policy values and state version 7 are
@@ -92,18 +85,6 @@ state wipe on deploy).
 - The UI stops extrapolating stale snapshots after 30 seconds, reports stale
   state visibly, and estimates Dota only during allowed, active play. Tray timers,
   menus, and icons are disposed. Session warnings require an active session.
-- Strava linking requires the owner API token, a browser-bound single-use OAuth
-  state, and the requested activity scope. Responses no longer return upstream
-  exception details. Linking another account clears the previous activity cache.
-- One singleton Strava client serializes refresh, sync, and account exchange to
-  protect rotating refresh tokens and avoid stale overlapping writes. Requests
-  are disposed, timed out, and cancelled during shutdown.
-- Activity sync replaces a complete 30-day snapshot, removing deleted workouts
-  and reading beyond the former five-page cutoff. Failed syncs preserve cache.
-  JSON writes are atomic; new Linux data files have owner-only permissions.
-- Workout queries require exact ISO dates; activity ranges use the configured
-  timezone and 03:00 logical-day boundary. Invalid timezones and unsafe numeric
-  configuration fail startup; credit caps are applied before integer conversion.
 - Installation checks native exit codes and stages both publishes before touching
   the installed application. It pauses the watchdog and updates the existing
   service instead of racing service deletion/recreation. Uninstallation removes
@@ -131,9 +112,8 @@ dotnet publish App/App.csproj -c Release -r win-x64 --self-contained false
 
 The regression project links the production engine/storage/process adapter source
 so it can execute on Linux without starting a Windows service. Its fake process
-adapter cannot kill real processes. Workout HTTP integration tests use an
-in-memory ASP.NET server and fake Strava HTTP responses; no real account or
-credentials are needed. The PowerShell check parses both setup scripts and
+adapter cannot kill real processes. Workout capture tests use an in-memory
+ASP.NET server. The PowerShell check parses both setup scripts and
 simulates a failed publish to verify that installation aborts.
 
 Ansible YAML and rendered Compose templates were parsed locally. Container builds
@@ -148,12 +128,10 @@ runs the build, regression suite, and setup-script check on Linux and Windows.
   idle clients, and actual process detection/termination.
 - Tray/window lifecycle, high DPI, activation from a second launch, notifications,
   and shutdown/reboot/sleep with real Steam and game processes.
-- Real Strava consent, token rotation, pagination/rate limits, persistent container
-  volumes, and Traefik routing require a configured deployment/account.
+- Persistent container volumes and Traefik routing need a deployed receiver.
 
-WorkoutService remains a separate API. The Windows service now consumes its
-credit over HTTP (15-minute sync plus on boot, Bearer token, per-day sums
-capped at the 8h weekly Dota cap) for weekday Dota; weekends use the free
-grant. Failed syncs keep the cached value and fresh state is fail-closed at
+WorkoutService provides the workout feed. The Windows service syncs it
+with a bearer token and converts workout seconds to Dota credit at 3.3×,
+up to the 8-hour weekly cap. Weekends use the free grant. Failed syncs keep the cached value and fresh state is fail-closed at
 zero. The demo is a standalone UI mockup and does not communicate with the
 service.

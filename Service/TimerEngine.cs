@@ -14,8 +14,7 @@ namespace Service;
 // blocks Steam equal to that session's length rounded up to 5 minutes.
 // Budget exhaustion kills + enforces until 03:00. Everything survives reboot.
 // Dota 2 on weekdays burns a workout-earned weekly budget (v7, Mon 03:00 reset):
-// weekday Dota time comes from cached workout credit (future Notify/Tasker
-// mapping; current server captures samples only). Mon–Fri playable
+// weekday Dota time comes from cached workout credit. Mon–Fri playable
 // Dota = min(8h cap, earned this week) + borrows - deductions, fail-closed at 0.
 // Sat/Sun keep the old free 8h grant. When the earned Dota budget is out only Dota is killed, Steam + other games
 // continue. Dota is entirely forbidden on Mon / Wed / Fri (logical day): only

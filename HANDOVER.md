@@ -4,12 +4,10 @@ See `REVIEW.md` for the current implementation and verification, and `RESETS.md`
 for the wipe history. The notes below are historical; state is v7
 (weekday workout-gated Dota: Mon–Fri playable Dota = min(8h cap, earned)
 + borrows − deductions, fail-closed at 0; Sat/Sun keep the free 8h grant).
-Strava has been removed. WorkoutService is now a raw Notify/Tasker capture demo;
-credit mapping waits for hardware samples. See `WORKOUT_PIPELINE.md` for the
-current plan and setup, including the Tasker export probe and source-selection
-gate. Spreadsheet export is documented for sensor data, not confirmed workout
-records. The Windows credit consumer still polls independently
-every 15 minutes, but capture-only HTTP 503 responses preserve cached credit.
+WorkoutService captures exercise uploads from Simple Health through Health
+Connect and Health Connect Webhook. See `WORKOUT_PIPELINE.md` for phone setup,
+the sample mapping, and the local 3.3× credit calculation. The Windows service
+syncs every 15 minutes. Sync failures preserve cached credit.
 
 ---
 

@@ -23,9 +23,9 @@ After the budget is used, kills Steam + games and keeps enforcing until 03:00.
 - **Dota 2:** **workout-gated on weekdays, up to 8h weekly**, resets
   **Monday 03:00**. On Mon–Fri, the base allowance comes from cached workout
   credit (up to 8h/week); existing Dota borrowing adds to that allowance.
-  **The replacement Notify → Tasker pipeline is capture-only for now** and
-  grants no new credit while we wait for hardware samples. Fresh state starts
-  with zero workout credit. **Sat/Sun keep the old free
+  The Windows service imports Health Connect workouts and earns 3.3 seconds
+  of Dota credit per workout second.
+  Fresh state starts with zero workout credit. **Sat/Sun keep the old free
   grant** (up to 8h/week, no workout needed). Dota time burns both budgets,
   but a Dota-only lockout kills just Dota — Steam and other games continue
   on the daily budget. **Forbidden on Mon / Wed / Fri** — Dota is
@@ -52,10 +52,9 @@ After the budget is used, kills Steam + games and keeps enforcing until 03:00.
 
 - `Service/` — Windows Service as LocalSystem. Owns state
   (`C:\ProgramData\SteamTimer\state.json`), 15s tick, 15m warning, deadline kill,
-  60s enforce loop until 03:00. A separate worker polls the credit API every
-  15 minutes (plus on boot), so network delays cannot pause enforcement. The
-  capture-only API returns 503, preserving cached credit until a real mapping
-  exists. Named pipe `steamtimer` (`status`; the old manual `start` now just
+  60s enforce loop until 03:00. A separate worker syncs workouts at startup and
+  every 15 minutes, then calculates credit locally. Failed syncs preserve cached
+  credit. Named pipe `steamtimer` (`status`; the old manual `start` now just
   answers "tracking is automatic"). Configure with `Workout:BaseUrl` +
   `Workout:ApiToken` (or `WORKOUT_BASE_URL` / `WORKOUT_API_TOKEN` env visible to
   the service). Settings are loaded beside the service executable; nonblank
@@ -83,13 +82,12 @@ and exercise raw capture, authorization, credit-client failures and caching. CI 
 builds, tests, and setup-script checks on Linux and Windows. See `REVIEW.md` for
 fixes and remaining Windows runtime checks.
 
-`WorkoutService/` is now a toy HTTP capture server for **Notify for Xiaomi →
-Tasker**. Strava has been removed. `POST /api/capture` saves raw data to files
-for later analysis; workout fields and credit conversion are intentionally
-pending real samples. Follow [WORKOUT_PIPELINE.md](WORKOUT_PIPELINE.md) to run
-the receiver, configure a Tasker probe, and collect the hardware test cases.
-The Windows credit client remains ready for a future daily credit API. Failed,
-unconfigured, and timed-out syncs preserve cached credit; fresh state starts at zero.
+`WorkoutService/` receives workouts from **Simple Health → Health Connect →
+Health Connect Webhook**. `POST /api/capture` saves uploads for inspection.
+[WORKOUT_PIPELINE.md](WORKOUT_PIPELINE.md) covers phone setup, the observed
+workout fields, PC acknowledgements, and server retention.
+The PC calculates credit from its deduplicated archive for the current logical
+week. Fresh state starts at zero.
 
 ## Notes / limits
 

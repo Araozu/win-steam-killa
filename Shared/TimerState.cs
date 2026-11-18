@@ -48,7 +48,6 @@ public class TimerState
     public int DotaBorrowCount { get; set; }
     public int DotaAdvanceDeductionSeconds { get; set; }
     // --- workout-gated Dota (v7): cached weekly workout credit.
-    // Replacement Notify/Tasker credit mapping awaits hardware samples.
     // No free weekday grant: Mon–Fri playable Dota = min(8h cap, earned)
     // + borrows - deductions; Sat/Sun keep the free 8h grant.
     // Fail-closed: fresh/offline/unconfigured state has 0 earned => weekday Dota blocked.
