@@ -2,7 +2,7 @@ using System.Diagnostics;
 
 namespace Service;
 
-public sealed class Worker : BackgroundService
+internal sealed class Worker : BackgroundService
 {
     private readonly TimerEngine _engine;
     private readonly PipeServer _pipe;

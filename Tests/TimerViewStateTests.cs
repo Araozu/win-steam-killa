@@ -11,9 +11,12 @@ public sealed class TimerViewStateTests
         return view;
     }
 
-    private static PipeResponse Status() => new()
+    private long _sequence;
+    private PipeResponse Status() => new()
     {
         Ok = true,
+        ServiceInstance = "service-run",
+        Sequence = ++_sequence,
         ServerNowUtc = new DateTime(2026, 11, 14, 12, 0, 0, DateTimeKind.Utc),
         SessionMaxSeconds = 7200,
         BudgetSeconds = 14400,
@@ -23,17 +26,37 @@ public sealed class TimerViewStateTests
     };
 
     [Fact]
-    public void PausedCountdownIncludesTheNewSessionLimit()
+    public void IdleTrayShowsReadyWithoutAProjectedCountdown()
     {
         var view = View(Status());
         Assert.Equal(7200, view.Project(_clock.LocalNow).Playable);
+        Assert.False(view.Project(_clock.LocalNow).SessionActive);
+        Assert.Equal(("Ready", TrayLevel.Normal), TrayStatus.Describe(view, _clock.LocalNow));
+    }
+
+    [Theory]
+    [InlineData(true, false)] // The old session is still recorded, but play stopped.
+    [InlineData(false, true)] // Play was detected, but the service hasn't opened a session.
+    public void ACountdownRequiresBothAnOpenSessionAndDetectedPlay(bool running, bool detected)
+    {
+        var status = Status();
+        status.Running = running;
+        status.SteamRunning = detected;
+        status.SessionElapsedSeconds = 90;
+        var view = View(status);
+        _clock.Advance(10);
+        var values = view.Project(_clock.LocalNow);
+        Assert.False(values.SessionActive);
+        Assert.Equal(status.RemainingSeconds, values.Remaining);
+        Assert.Equal(90, values.SessionElapsed);
+        Assert.Equal(("Ready", TrayLevel.Normal), TrayStatus.Describe(view, _clock.LocalNow));
     }
 
     [Fact]
     public void ActiveDotaLimitsTheHeadlineButOtherGamesKeepTheirDailyAllowance()
     {
         var status = Status();
-        status.Running = status.DotaRunning = true;
+        status.Running = status.SteamRunning = status.DotaRunning = true;
         status.DotaRemainingSeconds = 90;
         var view = View(status);
         _clock.Advance(10);
@@ -51,7 +74,7 @@ public sealed class TimerViewStateTests
     public void BlockedDotaDoesNotAdvertisePlayableDotaTime(bool enforcing, bool forbidden)
     {
         var status = Status();
-        status.Running = status.DotaRunning = true;
+        status.Running = status.SteamRunning = status.DotaRunning = true;
         status.DotaEnforcing = enforcing;
         status.DotaForbidden = forbidden;
         var view = View(status);
@@ -80,7 +103,7 @@ public sealed class TimerViewStateTests
     public void EstimatesStopAtTheFirstSteamDeadline(string limit)
     {
         var status = Status();
-        status.Running = true;
+        status.Running = status.SteamRunning = true;
         status.SessionElapsedSeconds = limit == "session" ? 7195 : 0;
         status.RemainingSeconds = limit == "daily" ? 5 : 14400;
         if (limit == "window") status.WindowEndsLocal = _clock.LocalNow.AddSeconds(5);
@@ -96,7 +119,7 @@ public sealed class TimerViewStateTests
     public void StaleSnapshotsStopEstimatingAndAreNoLongerCurrent()
     {
         var status = Status();
-        status.Running = true;
+        status.Running = status.SteamRunning = true;
         var view = View(status);
         _clock.Advance(31);
         Assert.False(view.IsCurrent);
@@ -120,14 +143,65 @@ public sealed class TimerViewStateTests
     [Fact]
     public void OlderResponsesCannotRestoreAvailabilityOrResetSnapshotAge()
     {
+        var old = Status();
         var view = View(Status());
         _clock.Advance(20);
         view.MarkUnavailable();
-        var old = Status();
-        old.ServerNowUtc = old.ServerNowUtc.AddSeconds(-1);
         Assert.False(view.Update(old));
         Assert.False(view.IsCurrent);
         Assert.Equal(20, view.ElapsedSeconds);
+    }
+
+    [Fact]
+    public void ServiceClockGoingBackwardsDoesNotFreezeTheView()
+    {
+        var view = View(Status());
+        _clock.Advance(40);
+        var corrected = Status();
+        corrected.ServerNowUtc = corrected.ServerNowUtc.AddHours(-1);
+        Assert.True(view.Update(corrected));
+        Assert.True(view.IsCurrent);
+    }
+
+    [Fact]
+    public void ARestartedServiceIsAcceptedWithItsNewSequence()
+    {
+        var view = View(Status());
+        var restarted = Status();
+        restarted.ServiceInstance = "next-run";
+        restarted.Sequence = 1;
+        Assert.True(view.Update(restarted));
+    }
+
+    [Fact]
+    public void UnavailableServiceShowsTheReasonInTheTray()
+    {
+        var view = View(Status());
+        view.MarkUnavailable("The service's reply could not be read.");
+        Assert.Equal(("The service's reply could not be read.", TrayLevel.Unknown), TrayStatus.Describe(view, _clock.LocalNow));
+    }
+
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(6000, true)] // 20 minutes left in the session, hours left in the day.
+    public void TrayUsesThePlayableTimeIncludingTheSessionLimit(double sessionElapsed, bool low)
+    {
+        var status = Status();
+        status.Running = status.SteamRunning = true;
+        status.SessionElapsedSeconds = sessionElapsed;
+        var (text, level) = TrayStatus.Describe(View(status), _clock.LocalNow);
+        Assert.Equal(low ? TrayLevel.Low : TrayLevel.Normal, level);
+        Assert.StartsWith("Playing:", text);
+    }
+
+    [Fact]
+    public void TrayWarnsWhenThePlayWindowIsAboutToClose()
+    {
+        var status = Status();
+        status.WindowEndsLocal = _clock.LocalNow.AddMinutes(10);
+        var (text, level) = TrayStatus.Describe(View(status), _clock.LocalNow);
+        Assert.Equal(TrayLevel.Low, level);
+        Assert.Contains("until", text);
     }
 
     [Fact]

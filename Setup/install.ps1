@@ -8,6 +8,8 @@ $Watchdog = Get-ScheduledTask -TaskName "SteamTimerWatchdog" -ErrorAction Silent
 
 function Invoke-Native {
     param([string]$File, [string[]]$Arguments)
+    # Pass escaped quotes in the service image path the same way in both PowerShell versions.
+    if ($File -eq 'sc.exe') { $PSNativeCommandArgumentPassing = 'Legacy' }
     & $File @Arguments
     if ($LASTEXITCODE -ne 0) { throw "$File failed with exit code $LASTEXITCODE" }
 }
@@ -40,15 +42,19 @@ try {
 
     Write-Host "Copying to $Dest ..."
     New-Item -ItemType Directory -Path $Dest -Force | Out-Null
-    Copy-Item "$Stage\Service\*" "$Dest\" -Recurse -Force
+    Get-ChildItem -LiteralPath "$Stage\Service" |
+        Where-Object { $_.Name -ne 'appsettings.json' -or -not (Test-Path -LiteralPath "$Dest\appsettings.json") } |
+        Copy-Item -Destination "$Dest\" -Recurse -Force
     New-Item -ItemType Directory -Path "$Dest\App" -Force | Out-Null
     Copy-Item "$Stage\App\*" "$Dest\App\" -Recurse -Force
 
     Write-Host "Configuring service..."
     # Update in place: deleting/recreating a service races pending deletion.
     $ServiceCommand = if ($Service) { "config" } else { "create" }
-    Invoke-Native -File sc.exe -Arguments @($ServiceCommand, "SteamTimer", "binPath=", "`"$Dest\Service.exe`"", "start=", "auto", "obj=", "LocalSystem")
-    Invoke-Native -File sc.exe -Arguments @("description", "SteamTimer", "Enforces daily Steam time limit; resets at 03:00.")
+    $OwnerSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $ServicePath = '\"{0}\Service.exe\" --Pipe:AllowedUserSid={1}' -f $Dest, $OwnerSid
+    Invoke-Native -File sc.exe -Arguments @($ServiceCommand, "SteamTimer", "binPath=", $ServicePath, "start=", "auto", "obj=", "LocalSystem")
+    Invoke-Native -File sc.exe -Arguments @("description", "SteamTimer", "Enforces daily Steam time limit; resets at 00:00 UTC-05.")
     Invoke-Native -File sc.exe -Arguments @("failure", "SteamTimer", "reset=", "86400", "actions=", "restart/60000/restart/60000/restart/60000")
     Start-Service SteamTimer
     (Get-Service SteamTimer).WaitForStatus('Running', [TimeSpan]::FromSeconds(20))

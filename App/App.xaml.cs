@@ -19,8 +19,11 @@ public partial class SteamTimerApp : Microsoft.UI.Xaml.Application
         _mutex = new Mutex(true, @"Local\SteamTimerApp", out bool first);
         _openWindow = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\SteamTimerApp.Open");
         if (!first) { _openWindow.Set(); Exit(); return; }
-        _main = new MainWindow();
-        _tray = new TrayIcon(() => _main.ShowMain(), () => _main);
+        // The window and the tray share one lock so only one action (or
+        // confirmation dialog) can be in progress at a time.
+        var gate = new ActionGate();
+        _main = new MainWindow(gate);
+        _tray = new TrayIcon(() => _main.ShowMain(), () => _main, gate);
         _main.SetTray(_tray);
         _main.ShowMain();
         var dispatcher = _main.DispatcherQueue;

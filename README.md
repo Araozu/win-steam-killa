@@ -1,8 +1,11 @@
 # SteamTimer
 
 Self-control Steam limiter. Fully automatic — nothing to start or type,
-just play and it tracks. Day resets at **03:00 local**. Survives reboot.
-After the budget is used, kills Steam + games and keeps enforcing until 03:00.
+just play and it tracks. Day resets at **00:00 UTC-05**. Survives reboot.
+After the budget is used, kills Steam + games and keeps enforcing until 00:00.
+
+Every rule runs on a fixed **UTC-05** clock: day and week resets, play
+windows and the times shown in the app. The PC's time zone does not matter.
 
 ## Rules (hard-coded in `Shared/Limits.cs`, info-only in the UI)
 
@@ -20,49 +23,44 @@ After the budget is used, kills Steam + games and keeps enforcing until 03:00.
   (or the 2h max / budget hits).
 - **Cooldown:** after *every* session, Steam is blocked for that session's
   length **rounded up to 5 minutes** (e.g. 1h12m played → 1h15m cooldown).
-- **Dota 2:** **workout-gated on weekdays, up to 8h weekly**, resets
-  **Monday 03:00**. On Mon–Fri, the base allowance comes from cached workout
-  credit (up to 8h/week); existing Dota borrowing adds to that allowance.
-  The Windows service imports Health Connect workouts and earns 3.3 seconds
-  of Dota credit per workout second.
-  Fresh state starts with zero workout credit. **Sat/Sun keep the old free
-  grant** (up to 8h/week, no workout needed). Dota time burns both budgets,
-  but a Dota-only lockout kills just Dota — Steam and other games continue
-  on the daily budget. **Forbidden on Mon / Wed / Fri** — Dota is
-  closed/blocked all those days (03:00–03:00), burns no weekly budget.
-- **Play hours:** Mon–Fri Steam may only run **05:30–06:15** and **20:15–22:00**
-  (local wall-clock). Outside those windows Steam + games are closed/blocked
-  and nothing accrues. **Sat/Sun have no time restriction** (budget/cooldown/
-  Dota rules still apply).
-- **Borrow Dota from next week:** button takes **10m** off next week's Dota
-  for up to **+9m30s this week** (95% on the 1st press, −7pp, −8pp, −9pp...
-  each further press, 50% floor). One click, no confirm. Repeatable, capped
-  so next week never drops below zero.
+- **Dota 2** is playable Monday, Wednesday, Friday, Saturday, and Sunday.
+  It is blocked all day Tuesday and Thursday. Weekdays start with zero Dota
+  time on Monday. Workouts earn 3.3 seconds of Dota time per workout second,
+  with no credit cap. At 00:00 Saturday, the weekend budget starts with 4h
+  plus any unused weekday credit. Weekend workouts add to the weekend budget.
+  Unused credit expires at 00:00 Monday. Dota play uses the active Dota budget
+  and the daily Steam budget. A Dota-only lockout leaves other games available.
+- **Play hours:** Mon–Fri Steam may only run **05:30–06:15** and **20:15–22:00**.
+  Outside those windows Steam + games are closed/blocked and nothing accrues.
+  **Sat/Sun have no time restriction** (budget/cooldown/Dota rules still apply).
 
 ## Use (you need nothing about Windows)
 
 1. Install the .NET 10 SDK and .NET 10 Desktop Runtime on Windows.
-2. Open PowerShell **as Administrator**, go to this repository, and run `./Setup/install.ps1`.
+2. Open PowerShell **as Administrator** from the Windows account that will use
+   the tray, go to this repository, and run `./Setup/install.ps1`. The installer
+   grants that account access to the service's named pipe.
 3. Open **Steam Timer** from Start to see budget / session / cooldown / Dota.
-   The tray icon quietly shows remaining time. At 15 min left: warning.
-   At deadline: Steam is closed + blocked until 03:00.
+   The tray icon quietly shows remaining time. 15 min before the budget,
+   session, weekday play window or Dota allowance ends: warning.
+   At deadline: Steam is closed + blocked until 00:00.
    Closing the window does NOT stop the timer.
 
 ## How it works
 
 - `Service/` — Windows Service as LocalSystem. Owns state
   (`C:\ProgramData\SteamTimer\state.json`), 15s tick, 15m warning, deadline kill,
-  60s enforce loop until 03:00. A separate worker syncs workouts at startup and
+  60s enforce loop until 00:00. A separate worker syncs workouts at startup and
   every 15 minutes, then calculates credit locally. Failed syncs preserve cached
-  credit. Named pipe `steamtimer` (`status`; the old manual `start` now just
-  answers "tracking is automatic"). Configure with `Workout:BaseUrl` +
-  `Workout:ApiToken` (or `WORKOUT_BASE_URL` / `WORKOUT_API_TOKEN` env visible to
-  the service). Settings are loaded beside the service executable; nonblank
-  structured settings take precedence over these aliases.
+  credit. The workout archive keeps 90 days of records and a backup copy.
+  The app connects over the `steamtimer` named pipe. Open **Workout sync**
+  in the app to configure the receiver and run a sync on demand.
+  [Workout sync setup](WORKOUT_PIPELINE.md#local-sync-and-retention)
 - `App/` — WinUI 3 Fluent window + quiet WinForms tray (`NotifyIcon` tooltip = countdown,
   balloons only for warnings/kill/cooldown/Dota).
 - `Shared/` — `Limits` (2h session max, len-based cooldown, 30m carryover,
-  workout-gated Dota up to 8h/week), `LogicalDay` (03:00 reset), pipe DTOs.
+  weekday and weekend Dota budgets), `PolicyClock` (fixed UTC-05),
+  `LogicalDay` (00:00 reset), pipe DTOs.
 
 ## Dev
 

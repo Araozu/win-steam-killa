@@ -9,9 +9,14 @@ RUN dotnet publish ./WorkoutService/WorkoutService.csproj -c Release -o /app --n
 
 FROM mcr.microsoft.com/dotnet/aspnet:11.0
 WORKDIR /app
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app .
+# The image's non-root user owns the default data directory. Compose runs the
+# container as the host user that owns the bind-mounted ./workout-data.
+RUN mkdir -p /data && chown "$APP_UID" /data
+USER $APP_UID
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
 VOLUME /data
+HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
+    CMD ["dotnet", "/app/WorkoutService.dll", "--healthcheck"]
 ENTRYPOINT ["dotnet", "WorkoutService.dll"]

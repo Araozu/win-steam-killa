@@ -12,33 +12,48 @@ and the local archive format.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `API_TOKEN` | empty | Bearer token for workout endpoints. An empty token disables those endpoints. |
-| `DATA_DIR` | `/data` | Captures are written to `captures/` below this directory |
+| `CAPTURE_API_TOKEN` | `API_TOKEN` | Phone credential for posting captures |
+| `SYNC_API_TOKEN` | `API_TOKEN` | Windows service credential for reading and acknowledging workouts |
+| `API_TOKEN` | empty | Legacy fallback for either scope with no dedicated token |
+| `DATA_DIR` | `/data` | Uploads are written to `captures/` (queued) and `diagnostics/` (inspection only) below this directory |
+| `HEALTHCHECK_URL` | `http://127.0.0.1:8080/health` | URL probed by `--healthcheck` |
 
 ## Endpoints
 
+Every `/api` request needs a bearer token for its endpoint. The receiver checks
+the token before reading the body. Missing or incorrect tokens get HTTP 401.
+
 - `GET /health`: public liveness response including `mode: "workout-sync"`.
-- `POST /api/capture`: bearer-authenticated raw body, at most 256 KiB. Saves one
-  JSON envelope with receipt metadata, UTF-8 text (if valid) and original bytes
-  in base64. Returns `{captured,id,receivedAtUtc,creditGranted:false}` after saving.
-  Test uploads and unrecognized data are retained only for diagnostics.
-- `GET /api/workouts`: bearer-authenticated fetch of up to eight pending batches.
-- `POST /api/workouts/ack`: bearer-authenticated acknowledgement, with a JSON
-  object containing an `ids` array of delivered batch IDs. The receiver clears
-  acknowledged captures and captures older than one calendar month on startup
-  and every hour.
-- `GET /api/credit`: compatibility response for earlier clients. Returns HTTP
-  503 so those clients retain cached credit.
+- `POST /api/capture`: raw body, at most 256 KiB. Saves one JSON envelope with
+  receipt metadata, UTF-8 text (if valid) and original bytes in base64.
+  Returns `{captured,id,receivedAtUtc,queued}` after saving. Uploads with
+  workout records are queued for the PC (`queued: true`); Test uploads, empty
+  syncs and unrecognized data go to `diagnostics/`. Unreadable files found in
+  the existing queue are moved there so later workouts can still be delivered.
+- `GET /api/workouts`: fetch of up to eight pending batches.
+- `POST /api/workouts/ack`: acknowledgement, with a JSON object containing an
+  `ids` array of delivered batch IDs. The receiver deletes acknowledged
+  captures, and expires captures and diagnostics older than one calendar
+  month, on startup and every hour.
+
+## Health check
+
+`dotnet WorkoutService.dll --healthcheck` requests `/health` from the running
+receiver and exits 0 when it answers. The container image uses it, so it needs
+no curl.
 
 ## Deploy later using the existing container setup
 
-The Dockerfiles listen on port 8080 behind Traefik. The existing Jenkins/Ansible
-setup under `+devops/` uses `workouts.araoz.dev` and mounts `./workout-data:/data`.
+`+devops/docker/Dockerfile` builds the image from the repository root so it can
+include the shared record types. It listens on port 8080 behind Traefik and runs
+as a non-root user. The Jenkins/Ansible setup under `+devops/` uses
+`workouts.araoz.dev`, mounts `./workout-data:/data`, and runs the container as
+the deploy user, who owns that directory (mode 0700).
 Copy `+devops/+develop/.env.workout.example` to
-`/home/docker_admin/steamtimer-develop/.env.workout`, set `API_TOKEN`, and retain
-`DATA_DIR=/data`. Ansible checks this file exists and does not rewrite it.
-Captured files appear on the host at `workout-data/captures/`.
+`/home/docker_admin/steamtimer-develop/.env.workout`, set distinct capture and sync
+tokens, and retain `DATA_DIR=/data`. Ansible checks this file exists and does
+not rewrite it.
+Queued uploads appear on the host at `workout-data/captures/`.
 
-Build the container from the repository root so Docker can include the shared
-record types. The Windows service uses the same receiver credentials for the
-workout feed and calculates credit locally.
+Configure the phone with the capture token and set the Windows service's
+`Workout:ApiToken` to the sync token. The Windows service calculates credit locally.

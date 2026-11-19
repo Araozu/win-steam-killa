@@ -31,6 +31,13 @@ public static class Killer
     public static bool IsDotaName(string processName) =>
         DotaNames.Contains(processName, StringComparer.OrdinalIgnoreCase);
 
+    private static readonly HashSet<string> IgnoredPlayProcesses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "syncthing", "conhost", "hardwareupdater",
+    };
+
+    internal static bool IsIgnoredPlayProcess(string name) => IgnoredPlayProcesses.Contains(name);
+
     public static int KillAll(ILogger? log = null) => KillPlaySet(null, log);
 
     // Kill Steam subtree plus any extra exe names (orphaned games whose Steam
@@ -61,11 +68,12 @@ public static class Killer
                 foreach (var p in all)
                 {
                     int id = SafeId(p);
-                    if (id <= 0) continue;
+                    string name = SafeName(p);
+                    if (id <= 0 || IsIgnoredPlayProcess(name)) continue;
                     if (steamRoots.Contains(id) || HasSteamAncestor(id, steamRoots, parentOf))
                         targets.Add(p);
-                    else if (extra.Count > 0 && extra.Contains(SafeName(p))
-                        && knownPaths.TryGetValue(SafeName(p), out var paths)
+                    else if (extra.Count > 0 && extra.Contains(name)
+                        && knownPaths.TryGetValue(name, out var paths)
                         && paths.Contains(SafePath(p), StringComparer.OrdinalIgnoreCase))
                         targets.Add(p);
                 }
@@ -76,7 +84,7 @@ public static class Killer
         catch (Exception ex) { log?.LogWarning(ex, "KillAll failed"); return 0; }
     }
 
-    // Kill ONLY Dota 2 (weekly budget exhausted). Steam + other games survive.
+    // Kill ONLY Dota 2. Steam and other games survive.
     // Targets dota2.exe processes plus anything they spawned.
     public static int KillDota(ILogger? log = null)
     {
@@ -93,7 +101,7 @@ public static class Killer
                 foreach (var p in all)
                 {
                     int id = SafeId(p);
-                    if (id <= 0) continue;
+                    if (id <= 0 || IsIgnoredPlayProcess(SafeName(p))) continue;
                     if (dotaRoots.Contains(id) || HasSteamAncestor(id, dotaRoots, parentOf))
                         targets.Add(p);
                 }
@@ -208,7 +216,7 @@ public static class Killer
                     if (HasSteamAncestor(id, clientRoots, parentOf))
                     {
                         string n = SafeName(p);
-                        if (!string.IsNullOrEmpty(n) && !IsClientName(n) && !IsSteamName(n))
+                        if (!string.IsNullOrEmpty(n) && !IsIgnoredPlayProcess(n) && !IsSteamName(n))
                             games.Add(new GameSight(n, id, SafePath(p)));
                     }
                 }
@@ -224,7 +232,7 @@ public static class Killer
                     foreach (var p in all)
                     {
                         string n = SafeName(p);
-                        if (string.IsNullOrEmpty(n) || !seenGames.Contains(n, StringComparer.OrdinalIgnoreCase))
+                        if (string.IsNullOrEmpty(n) || IsIgnoredPlayProcess(n) || !seenGames.Contains(n, StringComparer.OrdinalIgnoreCase))
                             continue;
                         if (!liveByName.TryGetValue(n, out var list))
                             liveByName[n] = list = new List<string>();

@@ -3,7 +3,7 @@ using Shared;
 namespace Service;
 
 // Fully automatic daily budget owner. Single lock guards state; called by Worker tick + pipe threads.
-// Model: each logical day (03:00 local) has a base budget (M-F 1h30m, Sat 2h30m,
+// Model: each logical day (00:00 UTC-05) has a base budget (M-F 1h30m, Sat 2h30m,
 // Sun 4h) plus up to 30m leftover carried from the previous day, plus optional
 // borrows (each -10m tomorrow, +95% then -7pp/-8pp/... of 10m today,
 // 0.1%-floor, no Sundays)
@@ -12,13 +12,9 @@ namespace Service;
 // fallback) is seen, a session opens and accrues. Each session can use up to 2h
 // of the day's budget. When a session ends (Steam closed or 2h max), a cooldown
 // blocks Steam equal to that session's length rounded up to 5 minutes.
-// Budget exhaustion kills + enforces until 03:00. Everything survives reboot.
-// Dota 2 on weekdays burns a workout-earned weekly budget (v7, Mon 03:00 reset):
-// weekday Dota time comes from cached workout credit. Mon–Fri playable
-// Dota = min(8h cap, earned this week) + borrows - deductions, fail-closed at 0.
-// Sat/Sun keep the old free 8h grant. When the earned Dota budget is out only Dota is killed, Steam + other games
-// continue. Dota is entirely forbidden on Mon / Wed / Fri (logical day): only
-// Dota is killed, nothing accrues, Steam + other games continue.
+// Budget exhaustion kills + enforces until 00:00. Everything survives reboot.
+// Dota uses a workout-funded weekday budget and a weekend budget with a
+// four-hour base, weekday leftovers, and weekend workout credit.
 public class TimerEngine
 {
     private readonly StateStore _store;
@@ -30,9 +26,11 @@ public class TimerEngine
     private DateTime _lastEnforceKill = DateTime.MinValue;
     private DateTime _lastDotaKill = DateTime.MinValue;
     private string _lastWindowNoteKey = "";
+    private string _windowWarnKey = "";
     private readonly ILogger<TimerEngine> _log;
-
-    public event Action<string, string>? Notify; // title, body (UI polls status; service also logs)
+    // Lets clients order responses without trusting the wall clock.
+    private readonly string _instance = Guid.NewGuid().ToString("N");
+    private long _sequence;
 
     // Max seconds accrued per tick: covers 15s interval + jitter, but a reboot/service
     // gap must not burn the budget while we were down.
@@ -58,14 +56,29 @@ public class TimerEngine
         _processes = processes ?? new WindowsPlayProcesses();
         _workout = workout;
         _state = _store.Load();
-        if (_state != null && _state.Version != 7)
+        if (_state is { Version: 7 } previous)
         {
-            _log.LogInformation("Discarding v{Old} state; policy tightened (v7 workout-gated Dota), fresh start.", _state.Version);
+            if (IsDotaWeekend(previous.LogicalDay))
+                previous.DotaWeekendUsedSeconds = previous.LegacyDotaUsedSeconds;
+            else
+            {
+                previous.DotaWeekdayUsedSeconds = previous.LegacyDotaUsedSeconds;
+                previous.DotaWeekdayEarnedSeconds = Math.Max(0, previous.LegacyDotaEarnedSeconds);
+            }
+            previous.Version = TimerState.CurrentVersion;
+            previous.LegacyDotaUsedSeconds = 0;
+            previous.LegacyDotaEarnedSeconds = 0;
+            previous.DotaWarned = previous.DotaNotified = previous.DotaForbiddenNotified = false;
+            _store.Save(previous);
+        }
+        else if (_state != null && _state.Version != TimerState.CurrentVersion)
+        {
+            _log.LogInformation("Discarding unsupported v{Old} timer state.", _state.Version);
             _state = null;
             _store.Clear();
         }
         var nowUtc = _utcNow();
-        var today = LogicalDay.ForLocal(nowUtc.ToLocalTime());
+        var today = LogicalDay.ForUtc(nowUtc);
         if (_state != null && _state.LogicalDay != today)
         {
             // Fresh day on boot: roll forward so yesterday's leftover carries in.
@@ -87,18 +100,18 @@ public class TimerEngine
     private static double EffectiveOf(TimerState st) => Math.Max(0,
         (double)st.BaseBudgetSeconds + st.CarryInSeconds + st.BorrowedSeconds - st.AdvanceDeductionSeconds);
 
-    private static double EffectiveDotaOf(TimerState st, string todayLogicalDay) => Math.Max(0,
-        WorkoutGrantedFor(todayLogicalDay, st.WorkoutDotaEarnedSeconds)
-        + st.DotaBorrowedSeconds - st.DotaAdvanceDeductionSeconds);
+    private static bool IsDotaWeekend(string logicalDay) =>
+        LogicalDay.TryParse(logicalDay, out var day) && Limits.IsWeekend(day.DayOfWeek);
 
-    // Weekdays: Dota must be earned (min(8h cap, cached weekly earnings)).
-    // Weekends: old free 8h grant. Unparseable day fails closed (gated).
-    private static double WorkoutGrantedFor(string todayLogicalDay, int earnedSeconds)
-    {
-        if (LogicalDay.TryParse(todayLogicalDay, out var d) && Limits.IsWeekend(d.DayOfWeek))
-            return Limits.DotaWeeklyBudget.TotalSeconds;
-        return Math.Min(Limits.DotaWeeklyBudget.TotalSeconds, Math.Max(0, earnedSeconds));
-    }
+    private static double DotaUsedOf(TimerState state, bool weekend) =>
+        weekend ? state.DotaWeekendUsedSeconds : state.DotaWeekdayUsedSeconds;
+
+    private static double DotaCarryoverOf(TimerState state) =>
+        Left(state.DotaWeekdayEarnedSeconds, state.DotaWeekdayUsedSeconds);
+
+    private static double EffectiveDotaOf(TimerState state, bool weekend) => weekend
+        ? Limits.DotaWeekendBase.TotalSeconds + state.DotaWeekendEarnedSeconds + DotaCarryoverOf(state)
+        : state.DotaWeekdayEarnedSeconds;
 
     // Tomorrow's base budget (for the borrow cap + display).
     private static int TomorrowBaseFor(string logicalDay)
@@ -132,7 +145,6 @@ public class TimerEngine
             deduction = old.BorrowCount * (int)Limits.BorrowCost.TotalSeconds;
         var st = new TimerState
         {
-            Version = 7,
             LogicalDay = today,
             BaseBudgetSeconds = BaseSecondsFor(today),
             CarryInSeconds = AdjacentCarry(old, today),
@@ -144,28 +156,18 @@ public class TimerEngine
             SeenGames = old?.SeenGames.ToList() ?? new(),
             GameHistory = old?.Copy().GameHistory ?? new(),
         };
-        // Weekly Dota usage survives day rollovers inside the same week
-        // (including this week's borrows + this week's advance deduction +
-        // this week's cached workout earnings).
+        st.WorkoutLastSyncUtc = old?.WorkoutLastSyncUtc ?? default;
         if (old != null && old.DotaWeekStart == week)
         {
-            st.DotaUsedSeconds = old.DotaUsedSeconds;
-            st.DotaWarned = old.DotaWarned;
-            st.DotaNotified = old.DotaNotified;
-            st.DotaBorrowedSeconds = old.DotaBorrowedSeconds;
-            st.DotaBorrowCount = old.DotaBorrowCount;
-            st.DotaAdvanceDeductionSeconds = old.DotaAdvanceDeductionSeconds;
-            st.WorkoutDotaEarnedSeconds = old.WorkoutDotaEarnedSeconds;
-            st.WorkoutLastSyncUtc = old.WorkoutLastSyncUtc;
-        }
-        else if (old != null && !string.IsNullOrEmpty(old.DotaWeekStart))
-        {
-            // New Dota week: last week's borrows become this week's deduction —
-            // but only for adjacent weeks (multi-week gaps forgive the debt).
-            if (LogicalDay.TryParse(old.DotaWeekStart, out var oldWeek)
-                && LogicalDay.TryParse(week, out var newWeek)
-                && newWeek.Date == oldWeek.Date.AddDays(7))
-                st.DotaAdvanceDeductionSeconds = old.DotaBorrowCount * (int)Limits.BorrowCost.TotalSeconds;
+            st.DotaWeekdayUsedSeconds = old.DotaWeekdayUsedSeconds;
+            st.DotaWeekendUsedSeconds = old.DotaWeekendUsedSeconds;
+            st.DotaWeekdayEarnedSeconds = old.DotaWeekdayEarnedSeconds;
+            st.DotaWeekendEarnedSeconds = old.DotaWeekendEarnedSeconds;
+            if (IsDotaWeekend(old.LogicalDay) == IsDotaWeekend(today))
+            {
+                st.DotaWarned = old.DotaWarned;
+                st.DotaNotified = old.DotaNotified;
+            }
         }
         return st;
     }
@@ -177,6 +179,7 @@ public class TimerEngine
             _state = NewDayState(today, nowUtc, _state);
             _store.Save(_state);
             _lastEnforceKill = DateTime.MinValue;
+            _lastDotaKill = DateTime.MinValue;
             _log.LogInformation("New logical day {Day}, base {Base}s + carry {Carry}s.",
                 today, _state.BaseBudgetSeconds, _state.CarryInSeconds);
         }
@@ -186,74 +189,47 @@ public class TimerEngine
             _state.BaseBudgetSeconds = BaseSecondsFor(today);
             _store.Save(_state);
         }
-        if (string.IsNullOrEmpty(_state.DotaWeekStart))
-        {
-            _state.DotaWeekStart = Limits.WeekStartForLogicalDay(today);
-            _store.Save(_state);
-        }
         return _state;
     }
 
-    // Monday 03:00 weeks: reset weekly Dota usage when the week turns over
-    // (normally happens via day rollover, this is the guard).
-    // Last week's Dota borrows become this week's deduction (adjacent weeks
-    // only; multi-week gaps forgive the debt, same as the daily model).
+    // NewDayState handles ordinary rollovers. This also covers older state
+    // that has a missing or out-of-date Dota week.
     private void EnsureWeek(TimerState st, string today)
     {
         string week = Limits.WeekStartForLogicalDay(today);
-        if (st.DotaWeekStart != week)
-        {
-            int deduction = 0;
-            if (!string.IsNullOrEmpty(st.DotaWeekStart)
-                && LogicalDay.TryParse(st.DotaWeekStart, out var oldWeek)
-                && LogicalDay.TryParse(week, out var newWeek)
-                && newWeek.Date == oldWeek.Date.AddDays(7))
-                deduction = st.DotaBorrowCount * (int)Limits.BorrowCost.TotalSeconds;
-            st.DotaWeekStart = week;
-            st.DotaUsedSeconds = 0;
-            st.DotaWarned = false;
-            st.DotaNotified = false;
-            st.DotaBorrowedSeconds = 0;
-            st.DotaBorrowCount = 0;
-            st.DotaAdvanceDeductionSeconds = deduction;
-            st.WorkoutDotaEarnedSeconds = 0;
-            st.WorkoutLastSyncUtc = default;
-            _lastDotaKill = DateTime.MinValue;
-            _store.Save(st);
-            _log.LogInformation("New Dota week {Week}, earned workout credit reset to 0 (8h cap).", week);
-        }
+        if (st.DotaWeekStart == week) return;
+
+        st.DotaWeekStart = week;
+        st.DotaWeekdayUsedSeconds = st.DotaWeekendUsedSeconds = 0;
+        st.DotaWeekdayEarnedSeconds = st.DotaWeekendEarnedSeconds = 0;
+        st.DotaWarned = st.DotaNotified = false;
+        _lastDotaKill = DateTime.MinValue;
+        _store.Save(st);
     }
 
-    // Apply weekly workout earnings (called by the service's periodic
-    // WorkoutService sync, never by the tick path). Only successful fetches
-    // update the cache: failures keep the previous value, fresh state is 0.
-    public void ApplyWorkoutEarned(string weekStartLogicalDay, int earnedSeconds, DateTime nowUtc)
+    // Failed syncs keep the last successfully calculated credit for both budgets.
+    public void ApplyWorkoutEarned(string weekStartLogicalDay, WorkoutCreditTotals earned, DateTime nowUtc)
     {
         lock (_lock)
         {
-            var today = LogicalDay.ForLocal(nowUtc.ToLocalTime());
+            var today = LogicalDay.ForUtc(nowUtc);
             var st = EnsureDay(today, nowUtc);
             EnsureWeek(st, today);
-            if (st.DotaWeekStart != weekStartLogicalDay) return; // stale week: ignore
-            int capped = (int)Math.Min(Math.Max(0, earnedSeconds), Limits.DotaWeeklyBudget.TotalSeconds);
-            if (capped != st.WorkoutDotaEarnedSeconds || st.WorkoutLastSyncUtc == default)
-            {
-                st.WorkoutDotaEarnedSeconds = capped;
-                st.WorkoutLastSyncUtc = nowUtc;
-                _store.Save(st);
-                _log.LogInformation("Workout sync: {Earned}s Dota earned for week {Week}.", capped, weekStartLogicalDay);
-            }
-            else
-            {
-                st.WorkoutLastSyncUtc = nowUtc;
-                _store.Save(st);
-            }
+            if (st.DotaWeekStart != weekStartLogicalDay) return;
+
+            bool weekend = IsDotaWeekend(today);
+            double before = EffectiveDotaOf(st, weekend);
+            st.DotaWeekdayEarnedSeconds = Math.Max(0, earned.WeekdaySeconds);
+            st.DotaWeekendEarnedSeconds = Math.Max(0, earned.WeekendSeconds);
+            if (EffectiveDotaOf(st, weekend) > before) st.DotaWarned = st.DotaNotified = false;
+            st.WorkoutLastSyncUtc = nowUtc;
+            _store.Save(st);
         }
     }
 
     // Fetch the current week's earned credit and apply it. Returns false when
     // unconfigured or the fetch fails (cached value is kept).
-    public async Task<bool> RefreshWorkoutCreditsAsync(CancellationToken ct = default)
+    public async Task<bool> RefreshWorkoutCreditsAsync(CancellationToken ct = default, Action<Exception>? onFailure = null)
     {
         var source = _workout;
         if (source is null or NullWorkoutCreditSource) return false;
@@ -261,21 +237,34 @@ public class TimerEngine
         var nowUtc = _utcNow();
         lock (_lock)
         {
-            today = LogicalDay.ForLocal(nowUtc.ToLocalTime());
+            today = LogicalDay.ForUtc(nowUtc);
             week = Limits.WeekStartForLogicalDay(today);
         }
-        int earned;
+        WorkoutCreditTotals earned;
         try
         {
-            earned = await source.GetWeeklyEarnedSecondsAsync(week, today, ct).ConfigureAwait(false);
+            earned = await source.GetEarnedAsync(week, today, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             _log.LogWarning(ex, "Workout credit sync failed; keeping cached earned value.");
+            onFailure?.Invoke(ex);
             return false;
         }
         ApplyWorkoutEarned(week, earned, _utcNow());
         return true;
+    }
+
+    internal (DateTime LastSuccessUtc, long EarnedSeconds) GetWorkoutCreditStatus()
+    {
+        lock (_lock)
+        {
+            if (_state is null) return default;
+            var today = LogicalDay.ForUtc(_utcNow());
+            long earned = _state.DotaWeekStart == Limits.WeekStartForLogicalDay(today)
+                ? _state.DotaWeekdayEarnedSeconds + _state.DotaWeekendEarnedSeconds : 0;
+            return (_state.WorkoutLastSyncUtc, earned);
+        }
     }
 
     public PipeResponse Handle(PipeRequest? req)
@@ -283,9 +272,13 @@ public class TimerEngine
         lock (_lock)
         {
             var nowUtc = _utcNow();
-            var nowLocal = nowUtc.ToLocalTime();
-            var today = LogicalDay.ForLocal(nowLocal);
-            var resp = new PipeResponse { ServerNowUtc = nowUtc, NextResetLocal = LogicalDay.NextResetLocal(nowLocal), LogicalDay = today };
+            var nowLocal = PolicyClock.FromUtc(nowUtc);
+            var today = LogicalDay.For(nowLocal);
+            var resp = new PipeResponse
+            {
+                ServiceInstance = _instance, Sequence = ++_sequence,
+                ServerNowUtc = nowUtc, NextResetLocal = LogicalDay.NextReset(nowLocal), LogicalDay = today,
+            };
             var st = EnsureDay(today, nowUtc);
             EnsureWeek(st, today);
 
@@ -315,10 +308,6 @@ public class TimerEngine
             {
                 return Borrow(st, nowUtc, resp);
             }
-            if (req.Cmd == "borrowdota" || req.Cmd == "dota-borrow" || req.Cmd == "dotaadvance")
-            {
-                return BorrowDota(st, nowUtc, resp);
-            }
             return Fail("unknown cmd", resp);
         }
     }
@@ -335,7 +324,7 @@ public class TimerEngine
         string timer = r.OutsidePlayHours ? $"outside play hours (blocked until {r.NextPlayAllowedLocal:HH:mm}, accrues nothing)"
             : r.Running ? "session OPEN (accruing)" : r.InCooldown ? "in cooldown (blocked, accrues nothing)" : "no session (stopped)";
         string dota = r.DotaRunning ? ", Dota 2 running" : "";
-        if (r.DotaForbidden) dota += " (Dota forbidden Mon / Wed / Fri)";
+        if (r.DotaForbidden) dota += " (Dota blocked Tue / Thu)";
         return $"Detector sees {seen}. Timer: {timer}{dota}.";
     }
 
@@ -365,6 +354,8 @@ public class TimerEngine
         }
         st.BorrowCount++;
         st.BorrowedSeconds += gain;
+        // A bigger budget gets its own low-time warning and time-up notice.
+        st.Warned15m = st.KillNotified = false;
         _store.Save(st);
         _log.LogInformation("Borrow #{N}: +{Gain}s today ({Eff} effective), -{Cost}s tomorrow ({Day}).", st.BorrowCount, gain, eff, cost, st.LogicalDay);
         Fill(resp, st, nowUtc, liveCheck: true);
@@ -375,43 +366,13 @@ public class TimerEngine
         return resp;
     }
 
-    // Borrow 10m of NEXT WEEK's Dota budget for 95% (1st press), then -7pp,
-    // -8pp, -9pp, ... per further press, 50% floor, this week. Repeatable,
-    // any day, capped so next week's 8h cap never drops below zero.
-    // (v7: weekly Dota itself is workout-earned; borrows add on top of earned.)
-    private PipeResponse BorrowDota(TimerState st, DateTime nowUtc, PipeResponse resp)
-    {
-        int cost = (int)Limits.BorrowCost.TotalSeconds;
-        int nextNum = st.DotaBorrowCount + 1;
-        double eff = Limits.EffectivenessForDotaBorrowNumber(nextNum);
-        int gain = (int)Limits.DotaBorrowGainForNumber(nextNum).TotalSeconds;
-        int nextWeekBase = (int)Limits.DotaWeeklyBudget.TotalSeconds;
-        int debtAfter = nextNum * cost;
-        if (debtAfter > nextWeekBase)
-        {
-            Fill(resp, st, nowUtc, liveCheck: true);
-            int left = Math.Max(0, nextWeekBase - st.DotaBorrowCount * cost);
-            return Fail($"Next week only has {Limits.FormatHm(TimeSpan.FromSeconds(nextWeekBase))} Dota base " +
-                $"({Limits.FormatHm(TimeSpan.FromSeconds(left))} still borrowable). " +
-                $"Another +{Limits.FormatGain(TimeSpan.FromSeconds(gain))} this week would push next week below zero.", resp);
-        }
-        st.DotaBorrowCount++;
-        st.DotaBorrowedSeconds += gain;
-        _store.Save(st);
-        _log.LogInformation("Dota borrow #{N}: +{Gain}s this week ({Eff} effective), -{Cost}s next week (week {Week}).", st.DotaBorrowCount, gain, eff, cost, st.DotaWeekStart);
-        Fill(resp, st, nowUtc, liveCheck: true);
-        resp.ActionNote = $"Borrowed 10m of next week's Dota for " +
-            $"+{Limits.FormatGain(TimeSpan.FromSeconds(gain))} this week ({Limits.FormatEffectiveness(eff)} effective, use #{st.DotaBorrowCount}). " +
-            $"Next week loses 10m Dota.";
-        return resp;
-    }
-
     // Manual "force close to stop the timer": kill Steam + games now and, if a
     // session was open, end it immediately (with the normal cooldown for the
     // time played) so the next tick does not keep accruing.
     private PipeResponse ForceClose(TimerState st, DateTime nowUtc, PipeResponse resp)
     {
-        var before = _processes.Snapshot(st.SeenGames, st.GameHistory);
+        // Record running games before the kill so orphan detection remembers them.
+        _processes.Snapshot(st.SeenGames, st.GameHistory);
         int n = _processes.KillPlaySet(st.SeenGames, st.GameHistory, _log);
         if (st.SeenGames.Count > 50)
             st.SeenGames.RemoveRange(0, st.SeenGames.Count - 50);
@@ -459,7 +420,6 @@ public class TimerEngine
         }
         if (after.Playing)
             note += " Warning: something is still alive — hit force-close again or check the list above.";
-        _ = before;
         Fill(resp, st, nowUtc, liveCheck: false, steamCache: after.Playing, dotaCache: after.DotaRunning, detail: after);
         resp.KilledProcesses = n;
         resp.ActionNote = note;
@@ -502,22 +462,18 @@ public class TimerEngine
         double sessionMax = Limits.SessionMax.TotalSeconds;
         double sessElapsed = st.SessionUsedSeconds;
         double sessRem = Left(sessionMax, st.SessionUsedSeconds);
-        double dotaBudget = EffectiveDotaOf(st, st.LogicalDay);
-        double dotaBase = Limits.DotaWeeklyBudget.TotalSeconds;
-        double dotaRem = Left(dotaBudget, st.DotaUsedSeconds);
+        bool weekend = IsDotaWeekend(st.LogicalDay);
+        double dotaBudget = EffectiveDotaOf(st, weekend);
+        double dotaUsed = DotaUsedOf(st, weekend);
+        double dotaRem = Left(dotaBudget, dotaUsed);
         bool dotaForbidden = Limits.IsDotaForbiddenLogicalDay(st.LogicalDay);
-        bool playAllowed = Limits.IsPlayAllowed(nowUtc.ToLocalTime());
+        bool playAllowed = Limits.IsPlayAllowed(PolicyClock.FromUtc(nowUtc));
         r.OutsidePlayHours = !playAllowed;
-        r.NextPlayAllowedLocal = Limits.NextPlayAllowedLocal(nowUtc.ToLocalTime());
-        r.WindowEndsLocal = Limits.CurrentWindowEndLocal(nowUtc.ToLocalTime());
+        r.NextPlayAllowedLocal = Limits.NextPlayAllowedLocal(PolicyClock.FromUtc(nowUtc));
+        r.WindowEndsLocal = Limits.CurrentWindowEndLocal(PolicyClock.FromUtc(nowUtc));
         r.Ok = true;
-        r.HasTimer = st.UsedSeconds > 0 || st.Running || remaining <= 0 || inCooldown || st.DotaUsedSeconds > 0;
         r.LogicalDay = st.LogicalDay;
         r.StartUtc = st.SessionStartUtc;
-        // Compat: deadline = next interesting instant under continuous play.
-        // In cooldown nothing accrues, so it is the cooldown end.
-        r.DeadlineUtc = inCooldown ? st.CooldownUntilUtc
-            : remaining <= 0 ? nowUtc : nowUtc.AddSeconds(Math.Min(remaining, sessRem));
         r.Enforcing = remaining <= 0;
         r.BudgetSeconds = (int)effective;
         r.BaseBudgetSeconds = st.BaseBudgetSeconds;
@@ -547,26 +503,21 @@ public class TimerEngine
         r.CooldownUntilUtc = st.CooldownUntilUtc;
         r.SessionMaxSeconds = (int)sessionMax;
         r.DotaWeekStart = st.DotaWeekStart;
-        r.DotaBudgetSeconds = (int)dotaBudget;
-        r.DotaUsedSeconds = st.DotaUsedSeconds;
+        r.DotaBudgetSeconds = dotaBudget;
+        r.DotaUsedSeconds = dotaUsed;
         r.DotaRemainingSeconds = dotaRem;
         r.DotaRunning = dotaRunning;
         r.DotaEnforcing = dotaRem <= 0 || dotaForbidden;
         r.DotaForbidden = dotaForbidden;
-        r.DotaResetsLocal = Limits.NextWeeklyResetLocal(nowUtc.ToLocalTime());
-        r.DotaBaseBudgetSeconds = (int)dotaBase;
-        r.DotaBorrowedSeconds = st.DotaBorrowedSeconds;
-        r.DotaBorrowCount = st.DotaBorrowCount;
-        r.DotaAdvanceDeductionSeconds = st.DotaAdvanceDeductionSeconds;
-        r.WorkoutDotaEarnedSeconds = st.WorkoutDotaEarnedSeconds;
+        r.DotaResetsLocal = Limits.NextWeeklyResetLocal(PolicyClock.FromUtc(nowUtc));
+        r.DotaWeekendBudget = weekend;
+        r.DotaCarryoverSeconds = weekend ? DotaCarryoverOf(st) : 0;
+        r.WorkoutDotaEarnedSeconds = weekend ? st.DotaWeekendEarnedSeconds : st.DotaWeekdayEarnedSeconds;
         r.WorkoutLastSyncUtc = st.WorkoutLastSyncUtc;
-        r.WorkoutGatesToday = !(LogicalDay.TryParse(st.LogicalDay, out var gday) && Limits.IsWeekend(gday.DayOfWeek));
-        r.NextDotaBorrowEffectiveness = Limits.NextDotaBorrowEffectiveness(st.DotaBorrowCount);
-        r.NextDotaBorrowGainSeconds = (int)Limits.DotaBorrowGainForNumber(st.DotaBorrowCount + 1).TotalSeconds;
         r.LiveClients = snap?.Clients.Take(10).ToList() ?? new List<string>();
         r.LiveGames = snap?.Games.Select(g => $"{g.Name} ({g.Pid})").Take(10).ToList() ?? new List<string>();
         r.MatchedOrphans = snap?.MatchedOrphans.Take(10).ToList() ?? new List<string>();
-        r.RememberedGames = st.SeenGames.Take(20).ToList();
+        r.RememberedGames = st.SeenGames.Where(name => !Killer.IsIgnoredPlayProcess(name)).Take(20).ToList();
     }
 
     private static void TrimHistory(TimerState st)
@@ -590,7 +541,7 @@ public class TimerEngine
         return cooldown;
     }
 
-    private static string UntilLocal(DateTime utc) => utc.ToLocalTime().ToString("HH:mm");
+    private static string UntilLocal(DateTime utc) => PolicyClock.FromUtc(utc).ToString("HH:mm");
 
     // Called every 15s by Worker. Returns notifications to surface.
     public List<(string Title, string Body)> Tick(ILogger log)
@@ -599,8 +550,8 @@ public class TimerEngine
         lock (_lock)
         {
             var nowUtc = _utcNow();
-            var nowLocal = nowUtc.ToLocalTime();
-            var today = LogicalDay.ForLocal(nowLocal);
+            var nowLocal = PolicyClock.FromUtc(nowUtc);
+            var today = LogicalDay.For(nowLocal);
             double sessionMax = Limits.SessionMax.TotalSeconds;
 
             var st = EnsureDay(today, nowUtc);
@@ -619,8 +570,9 @@ public class TimerEngine
 
             double effective() => EffectiveOf(st);
             double dailyLeft() => Left(effective(), st.UsedSeconds);
-            double effectiveDota() => EffectiveDotaOf(st, today);
-            double dotaLeft() => Left(effectiveDota(), st.DotaUsedSeconds);
+            bool dotaWeekend = Limits.IsWeekend(nowLocal.DayOfWeek);
+            double effectiveDota() => EffectiveDotaOf(st, dotaWeekend);
+            double dotaLeft() => Left(effectiveDota(), DotaUsedOf(st, dotaWeekend));
 
             bool playAllowed = Limits.IsPlayAllowed(nowLocal);
             DateTime nextAllowedLocal = Limits.NextPlayAllowedLocal(nowLocal);
@@ -638,7 +590,6 @@ public class TimerEngine
                 {
                     notes.Add(("Cooldown over",
                         $"You can play again. {Limits.FormatHm(TimeSpan.FromSeconds(dailyLeft()))} left today."));
-                    foreach (var n in notes) Notify?.Invoke(n.Item1, n.Item2);
                     return notes;
                 }
                 // Outside play hours: clear silently, fall through to the window block.
@@ -681,13 +632,11 @@ public class TimerEngine
                             $"Steam blocked until {nextAllowedLocal:HH:mm} ({Limits.PlayHoursSummary})."));
                     }
                 }
-                foreach (var n in notes) Notify?.Invoke(n.Item1, n.Item2);
                 return notes;
             }
-            _ = nextAllowedLocal;
 
-            // Mon / Wed / Fri: Dota 2 forbidden. Kill only Dota (60s throttle),
-            // accrue nothing to the weekly budget, notify once per day.
+            // Tue / Thu: Dota 2 forbidden. Kill only Dota (60s throttle),
+            // accrue nothing to the Dota budget, notify once per day.
             // Steam + other games continue normally on the daily budget.
             bool dotaForbidden = Limits.IsDotaForbiddenLogicalDay(today);
             if (dotaForbidden && dotaRunning)
@@ -702,13 +651,13 @@ public class TimerEngine
                 {
                     st.DotaForbiddenNotified = true;
                     _store.Save(st);
-                    notes.Add(("Dota 2 forbidden on Mon / Wed / Fri",
+                    notes.Add(("Dota 2 forbidden on Tue / Thu",
                         "No Dota today — back tomorrow. Steam + other games continue on the daily budget."));
                 }
                 else _store.Save(st);
             }
 
-            // Budget already exhausted: enforce until 03:00.
+            // Budget already exhausted: enforce until 00:00.
             if (Reached(st.UsedSeconds, effective()))
             {
                 EndSession(st, nowUtc);
@@ -726,7 +675,7 @@ public class TimerEngine
                             st.KillNotified = true;
                             _store.Save(st);
                             notes.Add(("Steam time is up",
-                                n > 0 ? $"Daily budget used. Closed {n} Steam process(es). Back after 03:00." : "Daily budget used. Blocked until 03:00."));
+                                n > 0 ? $"Daily budget used. Closed {n} Steam process(es). Back after 00:00." : "Daily budget used. Blocked until 00:00."));
                         }
                     }
                     else if (first)
@@ -734,11 +683,10 @@ public class TimerEngine
                         _lastEnforceKill = nowUtc;
                         st.KillNotified = true;
                         _store.Save(st);
-                        notes.Add(("Steam time is up", "Daily budget used. Steam is already closed. Back after 03:00."));
+                        notes.Add(("Steam time is up", "Daily budget used. Steam is already closed. Back after 00:00."));
                     }
                 }
                 else _store.Save(st);
-                foreach (var n in notes) Notify?.Invoke(n.Item1, n.Item2);
                 return notes;
             }
 
@@ -773,7 +721,6 @@ public class TimerEngine
                     }
                     else _store.Save(st);
                 }
-                foreach (var n in notes) Notify?.Invoke(n.Item1, n.Item2);
                 return notes;
             }
 
@@ -805,9 +752,11 @@ public class TimerEngine
                 {
                     // Corrections can lower earned credit below already consumed
                     // time. Never refund that historical usage by clamping down.
-                    st.DotaUsedSeconds += Math.Min(gap.TotalSeconds, dotaLeft());
-                    if (st.DotaUsedSeconds < effectiveDota() && dotaLeft() <= 0)
-                        st.DotaUsedSeconds = effectiveDota();
+                    double used = DotaUsedOf(st, dotaWeekend) + Math.Min(gap.TotalSeconds, dotaLeft());
+                    if (used < effectiveDota() && Left(effectiveDota(), used) <= 0)
+                        used = effectiveDota();
+                    if (dotaWeekend) st.DotaWeekendUsedSeconds = used;
+                    else st.DotaWeekdayUsedSeconds = used;
                 }
                 // Per-game identity log (informational, for precise tracking later).
                 foreach (var g in snap.Games.GroupBy(g => g.Name, StringComparer.OrdinalIgnoreCase))
@@ -835,7 +784,7 @@ public class TimerEngine
                 {
                     st.Warned15m = true;
                     notes.Add(("Steam closes in 15 minutes",
-                        $"Daily budget low. {Limits.FormatHm(TimeSpan.FromSeconds(rem))} left, back after 03:00. Save your game."));
+                        $"Daily budget low. {Limits.FormatHm(TimeSpan.FromSeconds(rem))} left, back after 00:00. Save your game."));
                     _log.LogInformation("15m budget warning sent.");
                 }
                 // Session warning (once per session): the 2h session max dipping
@@ -846,13 +795,27 @@ public class TimerEngine
                     notes.Add(("Session ends soon",
                         $"This session ends in {Limits.FormatHm(TimeSpan.FromSeconds(sessRem))}, then a cooldown. Close Steam now to keep the break short."));
                 }
-                // Dota weekly warning (once per week, while Dota is running).
+                // Play window warning (once per window): the weekday window closing
+                // before the session or daily budget would end play.
+                if (Limits.CurrentWindowEndLocal(nowLocal) is { } windowEnd)
+                {
+                    double windowRem = (windowEnd - nowLocal).TotalSeconds;
+                    string windowKey = windowEnd.ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+                    if (windowKey != _windowWarnKey && windowRem <= Limits.WarnBefore.TotalSeconds && windowRem > 0
+                        && windowRem < rem && windowRem < sessRem)
+                    {
+                        _windowWarnKey = windowKey;
+                        notes.Add(("Play window closes soon",
+                            $"Steam closes at {windowEnd:HH:mm} when play hours end ({Limits.FormatHm(TimeSpan.FromSeconds(windowRem))} left). Save your game."));
+                    }
+                }
+                // Dota warning for the active budget, while Dota is running.
                 // Skipped on forbidden days (forbidden, not low).
                 if (!st.DotaWarned && !dotaForbidden && dotaRunning && dRem <= Limits.WarnBefore.TotalSeconds && dRem > 0)
                 {
                     st.DotaWarned = true;
                     notes.Add(("Dota 2 closes in 15 minutes",
-                        $"Weekly Dota budget low. {Limits.FormatHm(TimeSpan.FromSeconds(dRem))} left (resets Monday 03:00). Other games are unaffected."));
+                        $"Dota budget low. {Limits.FormatHm(TimeSpan.FromSeconds(dRem))} left. Other games are unaffected."));
                     _log.LogInformation("15m Dota warning sent.");
                 }
                 _store.Save(st);
@@ -867,13 +830,12 @@ public class TimerEngine
                     _store.Save(st);
                     _log.LogInformation("Budget hit mid-session, killed {N}.", n);
                     notes.Add(("Steam time is up",
-                        n > 0 ? $"Daily budget used. Closed {n} Steam process(es). Back after 03:00." : "Daily budget used. Blocked until 03:00."));
-                    foreach (var n2 in notes) Notify?.Invoke(n2.Item1, n2.Item2);
+                        n > 0 ? $"Daily budget used. Closed {n} Steam process(es). Back after 00:00." : "Daily budget used. Blocked until 00:00."));
                     return notes;
                 }
-                // Dota weekly budget hit: kill ONLY Dota, Steam continues.
+                // Dota budget hit: kill only Dota so other games can continue.
                 // Skipped on forbidden days (the forbidden block above owns kills/notifications).
-                if (!dotaForbidden && Reached(st.DotaUsedSeconds, effectiveDota()))
+                if (!dotaForbidden && Reached(DotaUsedOf(st, dotaWeekend), effectiveDota()))
                 {
                     bool first = !st.DotaNotified;
                     if (dotaRunning && (nowUtc - _lastDotaKill) >= TimeSpan.FromMinutes(1))
@@ -886,7 +848,7 @@ public class TimerEngine
                             st.DotaNotified = true;
                             _store.Save(st);
                             notes.Add(("Dota 2 time is up",
-                                n > 0 ? $"Weekly Dota budget used. Closed {n} Dota process(es). Steam + other games continue on the daily budget." : "Weekly Dota budget used. Dota is blocked until Monday 03:00; other games continue."));
+                                n > 0 ? $"Dota budget used. Closed {n} Dota process(es). Steam + other games continue on the daily budget." : "Dota budget used. Other games continue."));
                         }
                         else _store.Save(st);
                     }
@@ -895,7 +857,7 @@ public class TimerEngine
                         st.DotaNotified = true;
                         _store.Save(st);
                         notes.Add(("Dota 2 time is up",
-                            "Weekly Dota budget used. Dota is blocked until Monday 03:00; other games continue on the daily budget."));
+                            "Dota budget used. Other games continue on the daily budget."));
                     }
                     else _store.Save(st);
                 }
@@ -909,7 +871,6 @@ public class TimerEngine
                     _store.Save(st);
                     notes.Add(("Session limit reached",
                         n > 0 ? $"Closed {n} Steam process(es). {Limits.FormatHm(TimeSpan.FromSeconds(rem))} of today's budget left — next session after {UntilLocal(st.CooldownUntilUtc)} ({Limits.FormatHm(cd)} cooldown)." : $"Session done ({Limits.FormatHm(Limits.SessionMax)} max). {Limits.FormatHm(TimeSpan.FromSeconds(rem))} left — next session after {UntilLocal(st.CooldownUntilUtc)}."));
-                    foreach (var n2 in notes) Notify?.Invoke(n2.Item1, n2.Item2);
                     return notes;
                 }
             }
@@ -938,20 +899,6 @@ public class TimerEngine
                 else _store.Save(st);
             }
         }
-        foreach (var n in notes) Notify?.Invoke(n.Item1, n.Item2);
         return notes;
-    }
-
-    public (bool HasTimer, DateTime DeadlineUtc, bool Enforcing) Snapshot()
-    {
-        lock (_lock)
-        {
-            if (_state == null) return (false, default, false);
-            double effective = EffectiveOf(_state);
-            double rem = Left(effective, _state.UsedSeconds);
-            bool inCd = _state.CooldownUntilUtc > _utcNow();
-            DateTime deadline = inCd ? _state.CooldownUntilUtc : _utcNow().AddSeconds(rem);
-            return (true, deadline, rem <= 0);
-        }
     }
 }

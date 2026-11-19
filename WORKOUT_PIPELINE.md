@@ -27,9 +27,15 @@ The original captures are local and Git-ignored.
 
 ## Local sync and retention
 
-Configure the Windows service with the receiver URL and shared token through
-`Workout:BaseUrl` and `Workout:ApiToken`, or `WORKOUT_BASE_URL` and
-`WORKOUT_API_TOKEN` in its environment. It polls at startup and every 15 minutes.
+In Steam Timer, open **Workout sync**, enter the HTTPS receiver URL and its
+sync bearer token, and click **Save settings**. Click **Sync now** to fetch
+pending workouts immediately and check the last successful sync. The service
+saves these settings in its own profile and polls automatically about every
+15 minutes. To rotate a token, enter the replacement and save again.
+
+For a service configured outside the app, `Workout:BaseUrl` and
+`Workout:ApiToken` or their `WORKOUT_BASE_URL` and `WORKOUT_API_TOKEN`
+environment aliases provide defaults until settings are saved in the app.
 With the default LocalSystem install, the archive is
 `%SystemRoot%\System32\config\systemprofile\AppData\Local\SteamTimer\workouts.json`.
 
@@ -48,19 +54,29 @@ Links can be made after the exercise and sensor uploads arrive on different poll
 The archive's `sensorLinks` maps each workout ID to keys in `heartRate`
 and `totalCalories`. It holds records and their links for use by the desktop.
 
+The PC keeps 90 days of records. Each sync drops older sessions, sensor
+readings and deletion markers. Every save keeps the previous archive as
+`workouts.json.bak`. If the archive is unreadable, the service loads the
+backup. If both are unreadable, it renames them to `*.corrupt-<time>` and starts
+an empty archive, so one damaged file cannot stop every future sync.
+
 The receiver moves acknowledged batches out of the pending queue. Cleanup runs
 on startup and hourly. It deletes acknowledged captures and expires any
-remaining captures older than one calendar month. The PC keeps its saved records.
+remaining captures and diagnostics older than one calendar month.
 
 ## Dota 2 credit on the PC
 
-SteamTimer sums the reported seconds of deduplicated workout sessions started
-in the current logical week through today, using the Windows time zone and
-the 03:00 reset. It multiplies the total by **3.3**, rounds down to a whole
-second, and applies the existing 8-hour weekly cap. The workout session alone
-qualifies, including its recorded warm-up time. Heart rate remains available
-in the archive for inspection. The 612-second sample earns 2,019 seconds
-(33 min 39 sec) before any play restrictions or usage deductions.
+SteamTimer counts deduplicated workouts that started in the current UTC-05
+week, from Monday at 00:00 through the current day. Workouts must be synced
+before the next Monday reset to earn credit. The start day determines the
+budget, so a Friday workout synced on Saturday adds to the weekend through
+weekday carryover. A Sunday workout first synced on Monday stays in the
+archive and earns no credit.
+
+Each budget receives 3.3 times its eligible workout seconds, rounded down to
+a whole second, with no credit cap. Overlapping workouts count their shared
+time once. The 612-second sample earns 2,019 seconds (33 min 39 sec). The weekend
+budget includes a 4-hour base plus unused weekday credit and weekend workouts.
 
 ## Capture a workout from Android
 
@@ -73,7 +89,7 @@ in the archive for inspection. The 612-second sample earns 2,019 seconds
    **Total calories** if you want those records linked.
    [Android app releases](https://github.com/mcnaveen/health-connect-webhook/releases/latest)
 3. Add a JSON webhook pointing to the receiver's `/api/capture` URL. Set the
-   header name to `Authorization` and the value to `Bearer YOUR_API_TOKEN`.
+   header name to `Authorization` and the value to `Bearer YOUR_CAPTURE_API_TOKEN`.
    Use the receiver's Tailscale address if both devices are on the same tailnet,
    or the HTTPS deployment URL. [Webhook configuration](https://github.com/mcnaveen/health-connect-webhook/blob/main/docs/webhook.md)
 4. Tap **Sync now** and check for HTTP 200 in **Webhook log**. Inspect the saved
@@ -96,13 +112,19 @@ dotnet run --project WorkoutService/WorkoutService.csproj --no-launch-profile --
 Use `http://<receiver-tailscale-ip>:5080/api/capture` on the phone. For the
 persistent deployment, follow the [WorkoutService setup](WorkoutService/README.md).
 
-Each accepted POST saves `DATA_DIR/captures/<id>.json` with receipt metadata and
-the original body. The service limits uploads to 256 KiB and keeps each retry
-as a separate capture. Inspect the inner JSON locally:
+Each accepted POST saves one JSON envelope with receipt metadata and the
+original body. Uploads with workout records go to `DATA_DIR/captures/<id>.json`
+and wait there for the PC. Everything else (Test payloads, empty syncs,
+unknown formats) goes to `DATA_DIR/diagnostics/<id>.json` and is never queued.
+The service limits uploads to 256 KiB and keeps each retry as a separate
+capture. Records from apps other than Simple Health, and rows that fail
+validation, are left out and counted in the receiver's log. Inspect the inner
+JSON locally:
 
 ```sh
 jq '.BodyText | fromjson' "$DATA_DIR/captures/<id>.json"
 ```
 
-The capture endpoint returns a receipt. SteamTimer fetches the records and
-calculates Dota credit locally.
+The capture endpoint returns a receipt with `queued: true` when the upload
+contained workout records. SteamTimer fetches the records and calculates Dota
+credit locally.

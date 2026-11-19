@@ -6,23 +6,31 @@ static class HealthConnectPayload
 {
     private static readonly JsonSerializerOptions Wire = new() { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
 
-    public static WorkoutDataBatch? Read(string? body)
+    public static WorkoutDataBatch? Read(string? body) => Read(body, out _);
+
+    // `skipped` counts records left out of the batch: rows from other apps,
+    // malformed rows and rows that fail validation.
+    public static WorkoutDataBatch? Read(string? body, out int skipped)
     {
+        skipped = 0;
         if (string.IsNullOrWhiteSpace(body)) return null;
         try
         {
             var payload = JsonSerializer.Deserialize<Payload>(body, Wire);
-            if (payload is null || payload.Test || !HasOffset(payload.Timestamp, out var uploadedAt)) return null;
+            if (payload is null || payload.Test == true || !HasOffset(payload.Timestamp, out var uploadedAt)) return null;
 
-            var sessions = Valid(payload.Exercise, row =>
+            int dropped = 0;
+            var sessions = Valid(payload.Exercise, ref dropped, row =>
             {
                 if (!ReadInfo(row.Metadata, out var info) || !ReadRange(row, out var start, out var end)
-                    || row.DurationSeconds is not > 0 || row.DurationSeconds > (end - start).TotalSeconds + 1)
+                    || row.DurationSeconds is not (>= 1 and < int.MaxValue)
+                    || row.DurationSeconds > (end - start).TotalSeconds + 1)
                     return null;
-                return new WorkoutSession(info, start, end, row.DurationSeconds.Value, row.Type, row.Title);
+                // HC Webhook reports whole seconds today; a fractional value is floored.
+                return new WorkoutSession(info, start, end, (int)Math.Floor(row.DurationSeconds.Value), row.Type, row.Title);
             });
 
-            var heartRate = Valid(payload.HeartRate, row =>
+            var heartRate = Valid(payload.HeartRate, ref dropped, row =>
             {
                 if (!ReadInfo(row.Metadata, out var info) || !HasOffset(row.Time, out var time)
                     || (row.Avg ?? row.Bpm) is not (> 0 and <= 300))
@@ -30,15 +38,16 @@ static class HealthConnectPayload
                 return new WorkoutHeartRate(info, time, (row.Avg ?? row.Bpm)!.Value, row.Min, row.Max, row.Avg.HasValue);
             });
 
-            var totalCalories = Valid(payload.TotalCalories, row =>
+            var totalCalories = Valid(payload.TotalCalories, ref dropped, row =>
                 ReadInfo(row.Metadata, out var info) && ReadRange(row, out var start, out var end)
                     && row.Calories is >= 0 and < double.PositiveInfinity
                     ? new WorkoutCalories(info, start, end, row.Calories.Value) : null);
 
-            var deleted = Valid(payload.Deleted, row =>
+            var deleted = Valid(payload.Deleted, ref dropped, row =>
                 (row.Type is "exercise" or "heart_rate" or "total_calories") && !string.IsNullOrWhiteSpace(row.Id)
                     ? new WorkoutDeletion(row.Type, row.Id) : null);
 
+            skipped = dropped;
             var batch = new WorkoutDataBatch(uploadedAt, sessions, heartRate, totalCalories, deleted);
             return batch.HasData() ? batch : null;
         }
@@ -49,21 +58,25 @@ static class HealthConnectPayload
         }
     }
 
-    private static TResult[] Valid<TResult>(JsonElement[]? rows, Func<Row, TResult?> convert) where TResult : class
+    private static TResult[] Valid<TResult>(JsonElement[]? rows, ref int dropped, Func<Row, TResult?> convert) where TResult : class
     {
         var result = new List<TResult>();
         foreach (var element in rows ?? [])
         {
-            if (element.ValueKind != JsonValueKind.Object) continue;
-            try
+            TResult? converted = null;
+            if (element.ValueKind == JsonValueKind.Object)
             {
-                if (element.Deserialize<Row>(Wire) is { } row && convert(row) is { } converted)
-                    result.Add(converted);
+                try
+                {
+                    if (element.Deserialize<Row>(Wire) is { } row) converted = convert(row);
+                }
+                catch (JsonException)
+                {
+                    // A malformed row does not discard other records in the same upload.
+                }
             }
-            catch (JsonException)
-            {
-                // A malformed row does not discard other records in the same upload.
-            }
+            if (converted is null) dropped++;
+            else result.Add(converted);
         }
         return result.ToArray();
     }
@@ -91,10 +104,10 @@ static class HealthConnectPayload
         return true;
     }
 
-    private sealed record Payload(string? Timestamp, bool Test, JsonElement[]? Exercise,
+    private sealed record Payload(string? Timestamp, bool? Test, JsonElement[]? Exercise,
         JsonElement[]? HeartRate, JsonElement[]? TotalCalories, JsonElement[]? Deleted);
 
-    private sealed record Row(string? StartTime, string? EndTime, string? Time, int? DurationSeconds,
+    private sealed record Row(string? StartTime, string? EndTime, string? Time, double? DurationSeconds,
         string? Type, string? Title, double? Bpm, double? Avg, double? Min, double? Max,
         double? Calories, string? Id, Metadata? Metadata);
 
