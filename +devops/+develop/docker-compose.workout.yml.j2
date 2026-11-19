@@ -4,8 +4,7 @@ services:
     pull_policy: never
     container_name: {{ project_name }}-workout-{{ project_stage }}
     restart: unless-stopped
-    # Run as the deploy user, who owns ./workout-data on the host.
-    user: "{{ ansible_user_uid }}:{{ ansible_user_gid }}"
+    user: "1004:1004"
     environment:
       - TZ=America/Lima
       - DATA_DIR=/data
