@@ -3,7 +3,7 @@ namespace Shared;
 public class TimerState
 {
     public int Version { get; set; } = 7;
-    // Logical day "yyyy-MM-dd" (03:00 local -> 03:00 local). Base budget derives
+    // Logical day "yyyy-MM-dd" (00:00 -> 00:00 UTC-05). Base budget derives
     // from its weekday; effective budget includes carry-in and borrowing.
     public string LogicalDay { get; set; } = "";
     public int BaseBudgetSeconds { get; set; }
@@ -35,7 +35,7 @@ public class TimerState
     public List<string> SeenGames { get; set; } = new();
     // Observed Steam child games (identity log for precise per-game tracking).
     public List<GameRecord> GameHistory { get; set; } = new();
-    // --- Dota 2 weekly budget (resets Monday 03:00 local) ---
+    // --- Dota 2 weekly budget (resets Monday 00:00 UTC-05) ---
     // Monday "yyyy-MM-dd" of the current logical week.
     public string DotaWeekStart { get; set; } = "";
     public double DotaUsedSeconds { get; set; }
@@ -86,18 +86,20 @@ public class GameRecord
 public class PipeRequest
 {
     public string Cmd { get; set; } = ""; // "status" | "recheck" | "kill" | "borrow" | "borrowdota"
-    public int Seconds { get; set; }
 }
 
+// Fields named *Local are policy-clock times (UTC-05), not the PC's time zone.
 public class PipeResponse
 {
     public bool Ok { get; set; }
     public string Error { get; set; } = "";
+    // Response order: Sequence increases within one service run. A new
+    // ServiceInstance (service restart) starts a new sequence.
+    public string ServiceInstance { get; set; } = "";
+    public long Sequence { get; set; }
     // Present on status:
-    public bool HasTimer { get; set; }
     public string LogicalDay { get; set; } = "";
     public DateTime StartUtc { get; set; }
-    public DateTime DeadlineUtc { get; set; }
     public bool Enforcing { get; set; }
     public DateTime ServerNowUtc { get; set; }
     public DateTime NextResetLocal { get; set; }

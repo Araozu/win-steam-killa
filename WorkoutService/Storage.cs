@@ -8,14 +8,23 @@ sealed record RequestCapture(string Id, DateTimeOffset ReceivedAtUtc, string? Co
     public WorkoutDataBatch? WorkoutData { get; init; }
 }
 
+// captures/     uploads with workout data, queued for the PC until acknowledged
+// diagnostics/  everything else (test pings, empty syncs, unknown formats)
+// acknowledged/ delivered captures, deleted by the next cleanup
+// Captures in captures/ and diagnostics/ expire after one calendar month.
 sealed class CaptureStore
 {
-    private readonly string _directory;
+    private readonly string _pending;
+    private readonly string _diagnostics;
     private readonly string _acknowledged;
-    public CaptureStore(CaptureConfig config)
+    private readonly ILogger<CaptureStore>? _log;
+
+    public CaptureStore(CaptureConfig config, ILogger<CaptureStore>? log = null)
     {
-        _directory = Path.Combine(config.DataDir, "captures");
+        _pending = Path.Combine(config.DataDir, "captures");
+        _diagnostics = Path.Combine(config.DataDir, "diagnostics");
         _acknowledged = Path.Combine(config.DataDir, "acknowledged");
+        _log = log;
     }
 
     public async Task<RequestCapture> SaveAsync(byte[] body, string? contentType, string userAgent, CancellationToken ct)
@@ -23,16 +32,21 @@ sealed class CaptureStore
         string? text;
         try { text = new UTF8Encoding(false, true).GetString(body); }
         catch (DecoderFallbackException) { text = null; }
+        var workoutData = HealthConnectPayload.Read(text, out int skipped);
         var capture = new RequestCapture(Guid.NewGuid().ToString("N"), DateTimeOffset.UtcNow,
             contentType, userAgent, body.Length, text, Convert.ToBase64String(body))
         {
-            WorkoutData = HealthConnectPayload.Read(text)
+            WorkoutData = workoutData
         };
-        Directory.CreateDirectory(_directory);
+        if (skipped > 0)
+            _log?.LogInformation("Capture {Id}: skipped {Skipped} record(s) from other apps or with invalid fields.", capture.Id, skipped);
+
+        string directory = workoutData is null ? _diagnostics : _pending;
+        Directory.CreateDirectory(directory);
         // IDs and filenames come from the server, never from phone input. Atomic
         // publication means readers only see completed captures. Keep every retry
         // so duplicate delivery and changing payloads can be inspected later.
-        var path = Path.Combine(_directory, capture.Id + ".json");
+        var path = Path.Combine(directory, capture.Id + ".json");
         var temp = path + ".tmp";
         try
         {
@@ -52,42 +66,53 @@ sealed class CaptureStore
     public async Task<List<WorkoutDelivery>> GetPendingAsync(CancellationToken ct)
     {
         var result = new List<WorkoutDelivery>();
-        foreach (var path in Files(_directory, "*.json").OrderBy(File.GetLastWriteTimeUtc))
+        foreach (var path in Files(_pending, "*.json").OrderBy(File.GetLastWriteTimeUtc))
         {
             ct.ThrowIfCancellationRequested();
             if (Expired(path, DateTimeOffset.UtcNow)) continue;
+            RequestCapture? capture;
             try
             {
                 await using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
-                var capture = await JsonSerializer.DeserializeAsync<RequestCapture>(file, cancellationToken: ct);
-                // Captures made before the sync API was added still participate.
-                var batch = capture?.WorkoutData ?? HealthConnectPayload.Read(capture?.BodyText);
-                if (capture is not null && batch is not null)
-                    result.Add(new WorkoutDelivery(capture.Id, batch));
+                capture = await JsonSerializer.DeserializeAsync<RequestCapture>(file, cancellationToken: ct);
+            }
+            catch (FileNotFoundException) { continue; } // Acknowledged or expired while listing.
+            // Captures saved before normalization was stored are parsed here once.
+            var batch = capture?.WorkoutData ?? HealthConnectPayload.Read(capture?.BodyText);
+            if (capture is not null && batch is not null)
+            {
+                result.Add(new WorkoutDelivery(capture.Id, batch));
                 if (result.Count == WorkoutDataBatch.PageSize) break;
             }
-            catch (FileNotFoundException) { } // Acknowledged or expired while listing.
+            else
+            {
+                // Nothing to deliver: keep it for inspection, out of the queue.
+                MoveIfPresent(path, _diagnostics);
+            }
         }
         return result;
     }
 
     public void Acknowledge(IEnumerable<string> ids)
     {
-        Directory.CreateDirectory(_acknowledged);
         foreach (string id in ids)
-        {
-            var file = id + ".json";
-            try { File.Move(Path.Combine(_directory, file), Path.Combine(_acknowledged, file)); }
-            catch (FileNotFoundException) { } // Acknowledgement retries are idempotent.
-            catch (DirectoryNotFoundException) when (!Directory.Exists(_directory)) { }
-        }
+            MoveIfPresent(Path.Combine(_pending, id + ".json"), _acknowledged); // Retries are idempotent.
     }
 
     public void Cleanup(DateTimeOffset now)
     {
         foreach (var path in Files(_acknowledged, "*.json")) File.Delete(path);
-        foreach (var path in Files(_directory, "*.json").Concat(Files(_directory, "*.tmp")))
-            if (Expired(path, now)) File.Delete(path);
+        foreach (var directory in new[] { _pending, _diagnostics })
+            foreach (var path in Files(directory, "*.json").Concat(Files(directory, "*.tmp")))
+                if (Expired(path, now)) File.Delete(path);
+    }
+
+    private static void MoveIfPresent(string path, string directory)
+    {
+        Directory.CreateDirectory(directory);
+        try { File.Move(path, Path.Combine(directory, Path.GetFileName(path))); }
+        catch (FileNotFoundException) { }
+        catch (DirectoryNotFoundException) { }
     }
 
     private static bool Expired(string path, DateTimeOffset now) => File.GetLastWriteTimeUtc(path) <= now.UtcDateTime.AddMonths(-1);

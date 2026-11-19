@@ -11,9 +11,12 @@ public sealed class TimerViewStateTests
         return view;
     }
 
-    private static PipeResponse Status() => new()
+    private long _sequence;
+    private PipeResponse Status() => new()
     {
         Ok = true,
+        ServiceInstance = "service-run",
+        Sequence = ++_sequence,
         ServerNowUtc = new DateTime(2026, 11, 14, 12, 0, 0, DateTimeKind.Utc),
         SessionMaxSeconds = 7200,
         BudgetSeconds = 14400,
@@ -120,14 +123,65 @@ public sealed class TimerViewStateTests
     [Fact]
     public void OlderResponsesCannotRestoreAvailabilityOrResetSnapshotAge()
     {
+        var old = Status();
         var view = View(Status());
         _clock.Advance(20);
         view.MarkUnavailable();
-        var old = Status();
-        old.ServerNowUtc = old.ServerNowUtc.AddSeconds(-1);
         Assert.False(view.Update(old));
         Assert.False(view.IsCurrent);
         Assert.Equal(20, view.ElapsedSeconds);
+    }
+
+    [Fact]
+    public void ServiceClockGoingBackwardsDoesNotFreezeTheView()
+    {
+        var view = View(Status());
+        _clock.Advance(40);
+        var corrected = Status();
+        corrected.ServerNowUtc = corrected.ServerNowUtc.AddHours(-1);
+        Assert.True(view.Update(corrected));
+        Assert.True(view.IsCurrent);
+    }
+
+    [Fact]
+    public void ARestartedServiceIsAcceptedWithItsNewSequence()
+    {
+        var view = View(Status());
+        var restarted = Status();
+        restarted.ServiceInstance = "next-run";
+        restarted.Sequence = 1;
+        Assert.True(view.Update(restarted));
+    }
+
+    [Fact]
+    public void UnavailableServiceShowsTheReasonInTheTray()
+    {
+        var view = View(Status());
+        view.MarkUnavailable("The service's reply could not be read.");
+        Assert.Equal(("The service's reply could not be read.", TrayLevel.Unknown), TrayStatus.Describe(view, _clock.LocalNow));
+    }
+
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(6000, true)] // 20 minutes left in the session, hours left in the day.
+    public void TrayUsesThePlayableTimeIncludingTheSessionLimit(double sessionElapsed, bool low)
+    {
+        var status = Status();
+        status.Running = true;
+        status.SessionElapsedSeconds = sessionElapsed;
+        var (text, level) = TrayStatus.Describe(View(status), _clock.LocalNow);
+        Assert.Equal(low ? TrayLevel.Low : TrayLevel.Normal, level);
+        Assert.StartsWith("Playing:", text);
+    }
+
+    [Fact]
+    public void TrayWarnsWhenThePlayWindowIsAboutToClose()
+    {
+        var status = Status();
+        status.WindowEndsLocal = _clock.LocalNow.AddMinutes(10);
+        var (text, level) = TrayStatus.Describe(View(status), _clock.LocalNow);
+        Assert.Equal(TrayLevel.Low, level);
+        Assert.Contains("until", text);
     }
 
     [Fact]

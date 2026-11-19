@@ -48,7 +48,7 @@ try {
     # Update in place: deleting/recreating a service races pending deletion.
     $ServiceCommand = if ($Service) { "config" } else { "create" }
     Invoke-Native -File sc.exe -Arguments @($ServiceCommand, "SteamTimer", "binPath=", "`"$Dest\Service.exe`"", "start=", "auto", "obj=", "LocalSystem")
-    Invoke-Native -File sc.exe -Arguments @("description", "SteamTimer", "Enforces daily Steam time limit; resets at 03:00.")
+    Invoke-Native -File sc.exe -Arguments @("description", "SteamTimer", "Enforces daily Steam time limit; resets at 00:00 UTC-05.")
     Invoke-Native -File sc.exe -Arguments @("failure", "SteamTimer", "reset=", "86400", "actions=", "restart/60000/restart/60000/restart/60000")
     Start-Service SteamTimer
     (Get-Service SteamTimer).WaitForStatus('Running', [TimeSpan]::FromSeconds(20))

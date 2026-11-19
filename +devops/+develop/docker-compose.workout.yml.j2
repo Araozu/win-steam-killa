@@ -4,8 +4,10 @@ services:
     pull_policy: never
     container_name: {{ project_name }}-workout-{{ project_stage }}
     restart: unless-stopped
+    # Run as the deploy user, who owns ./workout-data on the host.
+    user: "{{ ansible_user_uid }}:{{ ansible_user_gid }}"
     environment:
-      - TZ=America/Santiago
+      - TZ=America/Lima
       - DATA_DIR=/data
     env_file:
       - .env.workout
@@ -24,7 +26,7 @@ services:
       - "traefik.http.routers.{{ project_name }}-workout-{{ project_stage }}.tls.domains[0].sans=*.araoz.dev"
       - "traefik.http.services.{{ project_name }}-workout-{{ project_stage }}.loadbalancer.server.port=8080"
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      test: ["CMD", "dotnet", "/app/WorkoutService.dll", "--healthcheck"]
       interval: 60s
       timeout: 10s
       retries: 3

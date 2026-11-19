@@ -4,8 +4,10 @@ namespace Shared;
 // Model: every play session is auto-tracked (no manual start). Each session can
 // use up to 2h of the day's budget; after every session a cooldown blocks Steam
 // equal to that session's length rounded up to 5 minutes.
-// Weekday play windows (Mon–Fri 05:30–06:15 + 20:15–22:00 local, weekends free):
+// Weekday play windows (Mon–Fri 05:30–06:15 + 20:15–22:00, weekends free):
 // outside the windows Steam is blocked and nothing accrues.
+// Every clock time, day and week uses PolicyClock (UTC-05, days start 00:00).
+// Methods named *Local take and return policy-clock times.
 public static class Limits
 {
     // Max continuous play session (every day).
@@ -14,7 +16,7 @@ public static class Limits
     public static readonly TimeSpan CooldownRoundUp = TimeSpan.FromMinutes(5);
     // Max leftover budget carried from one logical day to the next.
     public static readonly TimeSpan MaxCarryover = TimeSpan.FromMinutes(30);
-    // Dota 2 weekly play budget (resets Monday 03:00 local with the week).
+    // Dota 2 weekly play budget (resets Monday 00:00 UTC-05 with the week).
     public static readonly TimeSpan DotaWeeklyBudget = TimeSpan.FromHours(8);
     // Dota 2 is entirely forbidden on these weekdays (logical day).
     public static readonly HashSet<DayOfWeek> DotaForbiddenDays = new()
@@ -23,7 +25,7 @@ public static class Limits
         DayOfWeek.Wednesday,
         DayOfWeek.Friday,
     };
-    // Weekday play windows (local wall-clock). Mon–Fri Steam may only run
+    // Weekday play windows (policy clock). Mon–Fri Steam may only run
     // inside these ranges; Sat/Sun have no time restriction (budget/cooldown/
     // Dota rules still apply). End is exclusive (22:00 means up to 21:59:59).
     public static readonly TimeSpan WeekdayWindow1Start = new(5, 30, 0);
@@ -107,8 +109,9 @@ public static class Limits
 
     public static string DotaBorrowButtonText(int borrowCountSoFar) =>
         $"+10m from next week ({FormatEffectiveness(NextDotaBorrowEffectiveness(borrowCountSoFar))} effective)";
-    // Day resets at 03:00 local time.
-    public const int ResetHourLocal = 3;
+    // Day resets at 00:00 on the policy clock (UTC-05).
+    public const int ResetHour = 0;
+    public const string ResetClockText = "00:00";
     public const string PipeName = "steamtimer";
     public const string StateDir = @"C:\ProgramData\SteamTimer";
     public const string StateFile = @"C:\ProgramData\SteamTimer\state.json";
@@ -142,7 +145,7 @@ public static class Limits
     }
 
     // Monday (yyyy-MM-dd) of the logical week containing this logical day.
-    // Week runs Mon 03:00 local -> next Mon 03:00 local.
+    // Week runs Mon 00:00 -> next Mon 00:00 (policy clock).
     public static string WeekStartForLogicalDay(string logicalDay)
     {
         if (LogicalDay.TryParse(logicalDay, out var d))
@@ -153,15 +156,15 @@ public static class Limits
         return logicalDay;
     }
 
-    // Next Monday 03:00 local (Dota week reset) after localNow.
-    public static DateTime NextWeeklyResetLocal(DateTime localNow)
+    // Next Monday 00:00 (Dota week reset) after policyNow.
+    public static DateTime NextWeeklyResetLocal(DateTime policyNow)
     {
-        var logicalToday = localNow.Hour < ResetHourLocal
-            ? localNow.Date.AddDays(-1)
-            : localNow.Date;
+        var logicalToday = policyNow.Hour < ResetHour
+            ? policyNow.Date.AddDays(-1)
+            : policyNow.Date;
         int back = ((int)logicalToday.DayOfWeek + 6) % 7;
         var monday = logicalToday.AddDays(-back);
-        return monday.AddDays(7).AddHours(ResetHourLocal);
+        return monday.AddDays(7).AddHours(ResetHour);
     }
 
     public static string FormatHm(TimeSpan t)
@@ -173,7 +176,7 @@ public static class Limits
     public static bool IsWeekend(DayOfWeek dow) =>
         dow == DayOfWeek.Saturday || dow == DayOfWeek.Sunday;
 
-    // True when Steam is allowed to run at this local wall-clock moment.
+    // True when Steam is allowed to run at this policy-clock moment.
     // Weekends: always true. Weekdays: only inside the two play windows.
     public static bool IsPlayAllowed(DateTime localNow)
     {

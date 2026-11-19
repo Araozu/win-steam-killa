@@ -25,8 +25,20 @@ public sealed class WorkoutCaptureTests : IDisposable
     }
 
     private void Authorize() => _client.DefaultRequestHeaders.Authorization = new("Bearer", "test-secret");
-    private string[] Files() => Directory.Exists(Path.Combine(_dir, "captures"))
-        ? Directory.GetFiles(Path.Combine(_dir, "captures"), "*.json") : [];
+    // Queued workout uploads.
+    private string[] Files() => Saved("captures");
+    // Uploads kept only for inspection (no workout data).
+    private string[] Diagnostics() => Saved("diagnostics");
+    private string[] Saved(string folder) => Directory.Exists(Path.Combine(_dir, folder))
+        ? Directory.GetFiles(Path.Combine(_dir, folder), "*.json") : [];
+
+    private const string Workout = """
+        {"timestamp":"2026-11-18T14:24:49Z","exercise":[
+            {"start_time":"2026-11-18T07:32:32.814-05:00","end_time":"2026-11-18T07:42:44.998-05:00",
+             "duration_seconds":612,"type":"0","title":"Training",
+             "metadata":{"id":"workout","data_origin":"com.mc.simplehealth","recording_method":"manual_entry",
+                         "last_modified_time":"2026-11-18T07:49:23.780-05:00"}}]}
+        """;
 
     public void Dispose()
     {
@@ -48,6 +60,7 @@ public sealed class WorkoutCaptureTests : IDisposable
         client.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", "Bearer ");
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsync("/api/capture", new StringContent("test"))).StatusCode);
         Assert.Empty(Files());
+        Assert.Empty(Diagnostics());
     }
 
     [Theory]
@@ -64,8 +77,9 @@ public sealed class WorkoutCaptureTests : IDisposable
         var response = await _client.PostAsync("/api/capture?token=private-query", new StringContent(raw, Encoding.UTF8, contentType));
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var reply = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement;
-        Assert.False(reply.GetProperty("creditGranted").GetBoolean());
-        var savedText = await File.ReadAllTextAsync(Assert.Single(Files()));
+        Assert.False(reply.GetProperty("queued").GetBoolean());
+        Assert.Empty(Files());
+        var savedText = await File.ReadAllTextAsync(Assert.Single(Diagnostics()));
         var capture = JsonSerializer.Deserialize<RequestCapture>(savedText)!;
         Assert.Equal(raw, capture.BodyText);
         Assert.Equal(Encoding.UTF8.GetBytes(raw), Convert.FromBase64String(capture.BodyBase64));
@@ -83,7 +97,7 @@ public sealed class WorkoutCaptureTests : IDisposable
         Authorize();
         byte[] raw = [0xff, 0x00, 0x80];
         Assert.Equal(HttpStatusCode.OK, (await _client.PostAsync("/api/capture", new ByteArrayContent(raw))).StatusCode);
-        var capture = JsonSerializer.Deserialize<RequestCapture>(await File.ReadAllTextAsync(Assert.Single(Files())))!;
+        var capture = JsonSerializer.Deserialize<RequestCapture>(await File.ReadAllTextAsync(Assert.Single(Diagnostics())))!;
         Assert.Null(capture.BodyText);
         Assert.Equal(raw, Convert.FromBase64String(capture.BodyBase64));
     }
@@ -93,13 +107,44 @@ public sealed class WorkoutCaptureTests : IDisposable
     {
         Authorize();
         var responses = await Task.WhenAll(Enumerable.Range(0, 20).Select(_ =>
-            _client.PostAsync("/api/capture", new StringContent("same workout"))));
+            _client.PostAsync("/api/capture", new StringContent(Workout, Encoding.UTF8, "application/json"))));
         Assert.All(responses, response => Assert.Equal(HttpStatusCode.OK, response.StatusCode));
         Assert.Equal(20, Files().Length);
         var store = new CaptureStore(new("test-secret", _dir));
-        await store.SaveAsync(Encoding.UTF8.GetBytes("another"), "text/plain", "test", CancellationToken.None);
+        await store.SaveAsync(Encoding.UTF8.GetBytes(Workout), "application/json", "test", CancellationToken.None);
         Assert.Equal(21, Files().Length);
-        Assert.All(Files(), path => Assert.NotNull(JsonSerializer.Deserialize<RequestCapture>(File.ReadAllText(path))));
+        Assert.All(Files(), path => Assert.NotNull(JsonSerializer.Deserialize<RequestCapture>(File.ReadAllText(path))!.WorkoutData));
+    }
+
+    [Fact]
+    public async Task UploadsWithoutWorkoutDataStayOutOfTheQueue()
+    {
+        Authorize();
+        await Upload("""{"timestamp":"2026-11-18T14:38:17Z","test":true}""");
+        await Upload("""{"timestamp":"2026-11-18T14:38:17Z","exercise":[]}""");
+        Assert.Empty(Files());
+        Assert.Equal(2, Diagnostics().Length);
+
+        // A capture queued before normalization existed, holding no workout,
+        // is moved out of the queue the first time it is read.
+        var legacy = JsonSerializer.Deserialize<RequestCapture>(File.ReadAllText(Diagnostics()[0]))!;
+        Directory.CreateDirectory(Path.Combine(_dir, "captures"));
+        File.Move(Diagnostics()[0], Path.Combine(_dir, "captures", legacy.Id + ".json"));
+        Assert.Empty(await _client.GetFromJsonAsync<WorkoutDelivery[]>("/api/workouts") ?? throw new InvalidDataException());
+        Assert.Empty(Files());
+        Assert.Equal(2, Diagnostics().Length);
+    }
+
+    [Fact]
+    public void FractionalDurationsAreFlooredAndForeignRowsAreCounted()
+    {
+        var batch = HealthConnectPayload.Read(Workout.Replace("\"duration_seconds\":612", "\"duration_seconds\":612.184")
+            .Replace("\"exercise\":[", """
+                "exercise":[{"start_time":"2026-11-18T07:00:00-05:00","end_time":"2026-11-18T07:10:00-05:00","duration_seconds":600,
+                  "metadata":{"id":"other","data_origin":"com.example.other","last_modified_time":"2026-11-18T07:10:00-05:00"}},
+                """), out int skipped);
+        Assert.Equal(612, Assert.Single(batch!.Sessions).DurationSeconds);
+        Assert.Equal(1, skipped);
     }
 
     [Fact]
@@ -111,15 +156,21 @@ public sealed class WorkoutCaptureTests : IDisposable
         using var unknown = new UnknownLengthContent(new byte[CaptureConfig.MaxBodyBytes + 1]);
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, (await _client.PostAsync("/api/capture", unknown)).StatusCode);
         Assert.Empty(Files());
+        Assert.Empty(Diagnostics());
     }
 
     [Fact]
-    public async Task CreditIsUnavailableInCaptureMode()
+    public async Task HealthIsPublicAndEveryApiRouteChecksTheTokenBeforeReadingTheBody()
     {
         Assert.Equal(HttpStatusCode.OK, (await _client.GetAsync("/health")).StatusCode);
+        var malformed = await _client.PostAsync("/api/workouts/ack", new StringContent("{not json", Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.Unauthorized, malformed.StatusCode);
+        Assert.Contains("Bearer", malformed.Headers.WwwAuthenticate.ToString());
         Assert.Equal(HttpStatusCode.Unauthorized, (await _client.GetAsync("/api/credit")).StatusCode);
         Authorize();
-        Assert.Equal(HttpStatusCode.ServiceUnavailable, (await _client.GetAsync("/api/credit?day=2026-11-14")).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await _client.PostAsync("/api/workouts/ack", new StringContent("{not json", Encoding.UTF8, "application/json"))).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await _client.GetAsync("/api/credit")).StatusCode); // Retired endpoint.
     }
 
     [Fact]
@@ -139,7 +190,8 @@ public sealed class WorkoutCaptureTests : IDisposable
         await File.WriteAllTextAsync(Assert.Single(Files()), JsonSerializer.Serialize(prior with { WorkoutData = null }));
         var archivePath = Path.Combine(_dir, "local", "workouts.json");
         Directory.CreateDirectory(archivePath + ".tmp");
-        var sync = new WorkoutDataSync(_client, _client.BaseAddress!.AbsoluteUri, "test-secret", archivePath);
+        var sync = new WorkoutDataSync(_client, _client.BaseAddress!.AbsoluteUri, "test-secret", archivePath,
+            clock: WorkoutClientTests.Clock);
         var failure = await Record.ExceptionAsync(() => sync.SyncAsync(default));
         Assert.True(failure is IOException or UnauthorizedAccessException, failure?.ToString());
         Assert.Single(Files());
@@ -175,9 +227,9 @@ public sealed class WorkoutCaptureTests : IDisposable
         Assert.Empty(Files());
 
         var workout = Assert.Single(archive.Sessions).Value;
-        string day = LogicalDay.ForLocal(workout.Start.LocalDateTime);
+        string day = LogicalDay.ForUtc(workout.Start.UtcDateTime);
         Assert.True(LogicalDay.TryParse(day, out var date));
-        var now = DateTime.SpecifyKind(date.AddHours(21), DateTimeKind.Local).ToUniversalTime();
+        var now = PolicyClock.ToUtc(date.AddHours(21));
         var state = new StateStore(Path.Combine(_dir, "timer.json"));
         var engine = new TimerEngine(Microsoft.Extensions.Logging.Abstractions.NullLogger<TimerEngine>.Instance,
             state, () => now, workout: new LocalWorkoutCreditSource(sync));
@@ -195,19 +247,25 @@ public sealed class WorkoutCaptureTests : IDisposable
     public async Task CleanupRemovesAcknowledgedAndMonthOldCaptures()
     {
         Authorize();
-        var old = await Upload("""{"timestamp":"2026-11-18T14:38:17Z","test":true}""");
-        var acknowledged = await Upload("{}");
-        var recent = await Upload("{}");
+        var old = await Upload(Workout);
+        var acknowledged = await Upload(Workout);
+        var recent = await Upload(Workout);
+        var oldDiagnostic = await Upload("""{"timestamp":"2026-11-18T14:38:17Z","test":true}""");
+        var recentDiagnostic = await Upload("{}");
         var now = DateTimeOffset.UtcNow;
-        File.SetLastWriteTimeUtc(Path.Combine(_dir, "captures", old + ".json"), now.UtcDateTime.AddMonths(-1).AddMinutes(-1));
+        var expired = now.UtcDateTime.AddMonths(-1).AddMinutes(-1);
+        File.SetLastWriteTimeUtc(Path.Combine(_dir, "captures", old + ".json"), expired);
+        File.SetLastWriteTimeUtc(Path.Combine(_dir, "diagnostics", oldDiagnostic + ".json"), expired);
         Assert.Equal(HttpStatusCode.NoContent, (await _client.PostAsJsonAsync("/api/workouts/ack",
             new WorkoutAcknowledgement([acknowledged]))).StatusCode);
 
         new CaptureStore(new("test-secret", _dir)).Cleanup(now);
 
         Assert.Equal(recent + ".json", Path.GetFileName(Assert.Single(Files())));
+        Assert.Equal(recentDiagnostic + ".json", Path.GetFileName(Assert.Single(Diagnostics())));
         Assert.Empty(Directory.GetFiles(Path.Combine(_dir, "acknowledged")));
-        Assert.Empty(await _client.GetFromJsonAsync<WorkoutDelivery[]>("/api/workouts") ?? throw new InvalidDataException());
+        Assert.Equal(recent, Assert.Single(await _client.GetFromJsonAsync<WorkoutDelivery[]>("/api/workouts")
+            ?? throw new InvalidDataException()).Id);
     }
 
     private async Task<string> Upload(string body)

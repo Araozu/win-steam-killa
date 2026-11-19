@@ -2,6 +2,24 @@ using System.Security.Cryptography;
 using System.Text;
 using Shared;
 
+// Container health probe: `dotnet WorkoutService.dll --healthcheck` exits 0 when
+// the running receiver answers /health. The runtime image needs no curl.
+if (args.Contains("--healthcheck"))
+{
+    string url = Environment.GetEnvironmentVariable("HEALTHCHECK_URL") ?? "http://127.0.0.1:8080/health";
+    try
+    {
+        using var probe = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        using var reply = await probe.GetAsync(url);
+        return reply.IsSuccessStatusCode ? 0 : 1;
+    }
+    catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+    {
+        Console.Error.WriteLine($"Health check failed: {ex.Message}");
+        return 1;
+    }
+}
+
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = CaptureConfig.MaxBodyBytes);
 var cfg = CaptureConfig.FromEnv();
@@ -10,19 +28,25 @@ builder.Services.AddSingleton<CaptureStore>();
 builder.Services.AddHostedService<CaptureCleanup>();
 
 var app = builder.Build();
+
+// Every /api endpoint needs the bearer token. This runs before endpoint
+// parameter binding, so unauthenticated bodies are never read or parsed.
+app.Use(async (context, next) =>
+{
+    if (context.Request.Path.StartsWithSegments("/api") && !Authorized(context.Request, cfg))
+    {
+        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        context.Response.Headers.WWWAuthenticate = "Bearer";
+        return;
+    }
+    await next(context);
+});
+
 app.MapGet("/health", () => Results.Ok(new { ok = true, mode = "workout-sync", timeUtc = DateTimeOffset.UtcNow }));
 
-bool Authorized(HttpRequest req, CaptureConfig c) => !string.IsNullOrWhiteSpace(c.ApiToken)
-    && req.Headers.TryGetValue("Authorization", out var h)
-    && h.ToString().StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
-    && CryptographicOperations.FixedTimeEquals(
-        SHA256.HashData(Encoding.UTF8.GetBytes(h.ToString()[7..])),
-        SHA256.HashData(Encoding.UTF8.GetBytes(c.ApiToken)));
-
 // Preserve the original webhook body for inspecting Health Connect samples.
-app.MapPost("/api/capture", async (HttpRequest req, CaptureConfig c, CaptureStore store) =>
+app.MapPost("/api/capture", async (HttpRequest req, CaptureStore store) =>
 {
-    if (!Authorized(req, c)) return Results.Unauthorized();
     if (req.ContentLength > CaptureConfig.MaxBodyBytes)
         return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
     using var body = new MemoryStream();
@@ -38,19 +62,17 @@ app.MapPost("/api/capture", async (HttpRequest req, CaptureConfig c, CaptureStor
     }
     var capture = await store.SaveAsync(body.ToArray(), req.ContentType, req.Headers.UserAgent.ToString(),
         req.HttpContext.RequestAborted);
-    return Results.Ok(new { captured = true, id = capture.Id, receivedAtUtc = capture.ReceivedAtUtc, creditGranted = false });
+    return Results.Ok(new { captured = true, id = capture.Id, receivedAtUtc = capture.ReceivedAtUtc, queued = capture.WorkoutData is not null });
 });
 
-app.MapGet("/api/workouts", async (HttpRequest req, CaptureConfig c, CaptureStore store) =>
+app.MapGet("/api/workouts", async (HttpContext context, CaptureStore store) =>
 {
-    if (!Authorized(req, c)) return Results.Unauthorized();
-    req.HttpContext.Response.Headers.CacheControl = "no-store";
-    return Results.Ok(await store.GetPendingAsync(req.HttpContext.RequestAborted));
+    context.Response.Headers.CacheControl = "no-store";
+    return Results.Ok(await store.GetPendingAsync(context.RequestAborted));
 });
 
-app.MapPost("/api/workouts/ack", (HttpRequest req, CaptureConfig c, CaptureStore store, WorkoutAcknowledgement ack) =>
+app.MapPost("/api/workouts/ack", (CaptureStore store, WorkoutAcknowledgement ack) =>
 {
-    if (!Authorized(req, c)) return Results.Unauthorized();
     if (ack.Ids is null || ack.Ids.Length is < 1 or > WorkoutDataBatch.PageSize
         || ack.Ids.Any(id => !Guid.TryParseExact(id, "N", out _)))
         return Results.BadRequest();
@@ -58,11 +80,14 @@ app.MapPost("/api/workouts/ack", (HttpRequest req, CaptureConfig c, CaptureStore
     return Results.NoContent();
 });
 
-// Earlier clients retain cached credit on HTTP 503.
-app.MapGet("/api/credit", (HttpRequest req, CaptureConfig c) => !Authorized(req, c)
-    ? Results.Unauthorized()
-    : Results.Problem("Health Connect captures are available for inspection. Workout credit is unavailable.",
-        statusCode: StatusCodes.Status503ServiceUnavailable));
-
 app.Run();
+return 0;
+
+static bool Authorized(HttpRequest req, CaptureConfig c) => !string.IsNullOrWhiteSpace(c.ApiToken)
+    && req.Headers.TryGetValue("Authorization", out var h)
+    && h.ToString().StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+    && CryptographicOperations.FixedTimeEquals(
+        SHA256.HashData(Encoding.UTF8.GetBytes(h.ToString()[7..])),
+        SHA256.HashData(Encoding.UTF8.GetBytes(c.ApiToken)));
+
 public partial class Program { }

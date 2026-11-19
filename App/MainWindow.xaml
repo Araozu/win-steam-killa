@@ -32,8 +32,8 @@
           <StackPanel>
             <TextBlock Text="Time of day" Style="{StaticResource CardTitle}"/>
             <Grid x:Name="TodTrack" Height="12">
-              <Border Background="#EFEFEF" CornerRadius="6"/>
-              <Border x:Name="TodFill" CornerRadius="6" Background="#111111" HorizontalAlignment="Left" Width="0"/>
+              <Border Background="{ThemeResource TrackBrush}" CornerRadius="6"/>
+              <Border x:Name="TodFill" CornerRadius="6" Background="{ThemeResource TimeFillBrush}" HorizontalAlignment="Left" Width="0"/>
               <Border x:Name="TodClosedTrack" CornerRadius="6" Visibility="Collapsed"/>
             </Grid>
             <Grid Margin="0,3,0,0">
@@ -48,7 +48,7 @@
         <Border Style="{StaticResource Card}" Margin="0,6,0,0">
           <StackPanel>
             <TextBlock Text="Session length" Style="{StaticResource CardTitle}"/>
-            <Border x:Name="SessTrack" Height="12" Background="#EFEFEF" CornerRadius="6">
+            <Border x:Name="SessTrack" Height="12" Background="{ThemeResource TrackBrush}" CornerRadius="6">
               <Border x:Name="SessFill" Height="12" CornerRadius="6" Background="#7145B8" HorizontalAlignment="Left" Width="0"/>
             </Border>
             <Grid Margin="0,3,0,0">
@@ -64,7 +64,7 @@
         <Border Style="{StaticResource Card}" Margin="0,6,0,0">
           <StackPanel>
             <TextBlock Text="Daily budget" Style="{StaticResource CardTitle}"/>
-            <Border x:Name="DayTrack" Height="12" Background="#EFEFEF" CornerRadius="6">
+            <Border x:Name="DayTrack" Height="12" Background="{ThemeResource TrackBrush}" CornerRadius="6">
               <Border x:Name="DayFill" Height="12" CornerRadius="6" Background="#1FAA53" HorizontalAlignment="Left" Width="0"/>
             </Border>
             <Grid Margin="0,3,0,0">
@@ -87,7 +87,7 @@
         <Border Style="{StaticResource Card}" Margin="0,6,0,0">
           <StackPanel>
             <TextBlock Text="Weekly Dota 2 budget" Style="{StaticResource CardTitle}"/>
-            <Border x:Name="DotaTrack" Height="12" Background="#EFEFEF" CornerRadius="6">
+            <Border x:Name="DotaTrack" Height="12" Background="{ThemeResource TrackBrush}" CornerRadius="6">
               <Border x:Name="DotaFill" Height="12" CornerRadius="6" Background="#D92D20" HorizontalAlignment="Left" Width="0"/>
             </Border>
             <Grid Margin="0,3,0,0">

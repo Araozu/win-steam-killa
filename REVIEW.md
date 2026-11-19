@@ -1,6 +1,53 @@
 # Code review and fixes
 
-## Current review: WPF port (2026-11-16)
+## Current review: WinUI app, service and WorkoutService (2026-11-18)
+
+Reviewed the WinUI 3 app, the Windows service and the ASP.NET receiver. Fixed:
+
+- **Policy clock.** Every rule now runs on a fixed UTC-05 clock with days and
+  Dota weeks starting at 00:00. Play windows previously used the PC's calendar
+  weekday while budgets used a 03:00 logical day, so Friday 00:00–03:00 was
+  unrestricted and Sunday 00:00–03:00 was blocked.
+- **Play window warning.** The tray and the service now warn 15 minutes before
+  a weekday play window closes when the window, not the budget or session, ends
+  play first. Previously Steam was closed at 22:00 without notice.
+- **Warnings after a bigger allowance.** Dota warnings were once per week and
+  daily warnings once per day, so new workout credit or a borrow led to a
+  silent kill. Tray flags are now keyed by the budget, and the service resets
+  its flags when the allowance grows. A weekday with no credit shows "Dota 2
+  needs a workout" instead of "time is up".
+- **Overlapping workouts.** Credit merges overlapping sessions, so a workout
+  saved twice under different IDs no longer earns double.
+- **Clock-independent ordering.** Pipe responses carry a service instance and
+  sequence number. A backwards clock correction no longer freezes the window as
+  stale.
+- **One tray renderer.** Tooltip and icon come from `TrayStatus`, based on the
+  playable time (session, window and Dota limits included). The poll no longer
+  sets a different icon that the window then overwrote.
+- **Shared action lock.** The window and tray share one `ActionGate`, taken
+  before confirmation dialogs, so two borrows or kills cannot overlap. Dialogs
+  are owned by the window when it is visible. The low-budget balloon only fires
+  while Steam is running.
+- **Receiver queue.** Uploads without workout data go to `diagnostics/` and
+  are never rescanned. Authorization is middleware that runs before body
+  binding. Fractional `duration_seconds` are floored instead of dropping the
+  row, and skipped rows are logged. The retired `/api/credit` stub is removed.
+- **Workout archive.** Saves keep a `.bak`; an unreadable archive falls back to
+  it, and if both are unreadable they are set aside so syncing continues.
+  Records older than 90 days are pruned on each sync.
+- **Containers.** One Dockerfile (`+devops/docker/Dockerfile`), non-root user,
+  and a built-in `--healthcheck` instead of installing curl. Compose runs as
+  the deploy user, and `workout-data` is mode 0700.
+- **Cleanup.** Removed unused `TimerEngine.Snapshot`, `TimerEngine.Notify`,
+  `PipeClient.Send`, `PipeRequest.Seconds`, and `PipeResponse.HasTimer`/
+  `DeadlineUtc`. `PipeClient` reports unreachable, no-reply and unreadable
+  replies separately. Progress bars use theme brushes for dark mode.
+
+Validation: Release solution build with zero warnings and 79 passing tests.
+The WinUI window, tray, dialogs and dark theme still need an interactive
+Windows smoke test, and the container needs a build and deploy.
+
+## Earlier review: WPF port (2026-11-16, since replaced by WinUI 3)
 
 Compared the WPF app with the preceding WinForms implementation. Fixed:
 

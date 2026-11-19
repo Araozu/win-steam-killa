@@ -1,23 +1,26 @@
 namespace Shared;
 
-// Logical day runs 03:00 local -> 03:00 local next day.
+// A logical day runs 00:00 -> 00:00 on the policy clock (UTC-05).
 public static class LogicalDay
 {
     public static bool TryParse(string value, out DateTime date) =>
         DateTime.TryParseExact(value, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
             System.Globalization.DateTimeStyles.None, out date);
 
-    public static string ForLocal(DateTime localNow)
+    // policyTime is a wall-clock reading on PolicyClock.
+    public static string For(DateTime policyTime)
     {
-        var day = localNow.Hour < Limits.ResetHourLocal
-            ? localNow.Date.AddDays(-1)
-            : localNow.Date;
+        var day = policyTime.Hour < Limits.ResetHour
+            ? policyTime.Date.AddDays(-1)
+            : policyTime.Date;
         return day.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
     }
 
-    public static DateTime NextResetLocal(DateTime localNow)
+    public static string ForUtc(DateTime utc) => For(PolicyClock.FromUtc(utc));
+
+    public static DateTime NextReset(DateTime policyTime)
     {
-        var todayReset = localNow.Date.AddHours(Limits.ResetHourLocal);
-        return localNow < todayReset ? todayReset : todayReset.AddDays(1);
+        var todayReset = policyTime.Date.AddHours(Limits.ResetHour);
+        return policyTime < todayReset ? todayReset : todayReset.AddDays(1);
     }
 }

@@ -86,16 +86,64 @@ internal sealed class WorkoutArchive
         SensorLinks = links;
     }
 
-    public static WorkoutArchive Load(string path)
+    // Credit only counts the current week; older records are kept for
+    // inspection for this long, then dropped so the archive stays small.
+    public static readonly TimeSpan Retention = TimeSpan.FromDays(90);
+
+    // Returns true when anything was removed.
+    public bool Prune(DateTimeOffset now)
     {
-        try
+        var cutoff = now - Retention;
+        int removed = RemoveWhere(Sessions, row => row.End < cutoff)
+            + RemoveWhere(TotalCalories, row => row.End < cutoff)
+            + RemoveWhere(HeartRate, entry => entry.Reading.Time < cutoff)
+            // Records older than the cutoff are pruned on arrival, so their
+            // deletion markers are no longer needed to keep them out.
+            + RemoveWhere(Deletions, deletedAt => deletedAt < cutoff);
+        return removed > 0;
+    }
+
+    private static int RemoveWhere<T>(Dictionary<string, T> rows, Func<T, bool> expired)
+    {
+        var keys = rows.Where(row => expired(row.Value)).Select(row => row.Key).ToArray();
+        foreach (var key in keys) rows.Remove(key);
+        return keys.Length;
+    }
+
+    // Reads the archive, falling back to the backup from the previous save.
+    // When neither copy is readable, both are renamed aside and an empty
+    // archive is returned, so a damaged file cannot stop every future sync.
+    public static WorkoutArchive Load(string path, ILogger? log = null)
+    {
+        var unreadable = new List<string>();
+        foreach (var candidate in new[] { path, path + ".bak" })
         {
-            using var file = File.OpenRead(path);
-            return JsonSerializer.Deserialize<WorkoutArchive>(file, WorkoutDataSync.Json)
-                ?? throw new InvalidDataException("Workout archive is empty.");
+            try
+            {
+                using var file = File.OpenRead(candidate);
+                var archive = JsonSerializer.Deserialize<WorkoutArchive>(file, WorkoutDataSync.Json);
+                if (archive is not null)
+                {
+                    if (unreadable.Count > 0) log?.LogWarning("Workout archive {Path} was unreadable; recovered its backup.", path);
+                    return archive;
+                }
+                unreadable.Add(candidate);
+            }
+            catch (FileNotFoundException) { }
+            catch (DirectoryNotFoundException) { }
+            catch (JsonException ex)
+            {
+                log?.LogWarning(ex, "Workout archive file {Path} is unreadable.", candidate);
+                unreadable.Add(candidate);
+            }
         }
-        catch (FileNotFoundException) { return new(); }
-        catch (DirectoryNotFoundException) { return new(); }
+
+        string stamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss", System.Globalization.CultureInfo.InvariantCulture);
+        foreach (var damaged in unreadable)
+            File.Move(damaged, $"{damaged}.corrupt-{stamp}", overwrite: true);
+        if (unreadable.Count > 0)
+            log?.LogError("Workout archive and backup are unreadable; moved them aside and started an empty archive.");
+        return new();
     }
 
     public void Save(string path)
@@ -109,7 +157,9 @@ internal sealed class WorkoutArchive
                 JsonSerializer.Serialize(file, this, WorkoutDataSync.Json);
                 file.Flush(flushToDisk: true);
             }
-            File.Move(temp, path, overwrite: true);
+            // Keep the previous archive as a backup for Load.
+            if (File.Exists(path)) File.Replace(temp, path, path + ".bak");
+            else File.Move(temp, path);
         }
         finally { if (File.Exists(temp)) File.Delete(temp); }
     }

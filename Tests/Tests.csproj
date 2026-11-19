@@ -24,6 +24,7 @@
     <Compile Include="../Service/Killer.cs" Link="Service/Killer.cs" />
     <Compile Include="../Service/PlayProcesses.cs" Link="Service/PlayProcesses.cs" />
     <Compile Include="../App/TimerViewState.cs" Link="App/TimerViewState.cs" />
+    <Compile Include="../App/TrayStatus.cs" Link="App/TrayStatus.cs" />
     <Using Include="Microsoft.Extensions.Logging" />
     <Using Include="Xunit" />
   </ItemGroup>

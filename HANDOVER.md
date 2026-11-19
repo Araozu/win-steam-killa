@@ -9,6 +9,18 @@ Connect and Health Connect Webhook. See `WORKOUT_PIPELINE.md` for phone setup,
 the sample mapping, and the local 3.3× credit calculation. The Windows service
 syncs every 15 minutes. Sync failures preserve cached credit.
 
+Current facts that supersede the historical notes below:
+- All policy runs on a fixed UTC-05 clock (`Shared/PolicyClock.cs`). Days and
+  Dota weeks reset at **00:00**, not 03:00 local, and the weekday play windows
+  use the same clock, so a window's weekday always matches the logical day.
+- `App/` is a WinUI 3 window plus a WinForms `NotifyIcon` tray (`TrayIcon`),
+  not WinForms-only. `MainWindow` owns the view state; its 1-second refresh is
+  the only thing that sets the tray tooltip and icon (`TrayStatus`). The tray
+  owns the 15s poll and all balloons. Window and tray share one `ActionGate`.
+- Pipe responses carry `ServiceInstance` + `Sequence`; the app orders
+  responses by those, never by the service clock.
+- The 9h Dota week mentioned below is now 8h and workout-gated on weekdays.
+
 ---
 
 # SteamTimer — agent handover

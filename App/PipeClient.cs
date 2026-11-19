@@ -4,12 +4,20 @@ using Shared;
 
 namespace App;
 
+// Response is null when the call failed; Problem then says why.
+public readonly record struct PipeReply(PipeResponse? Response, string Problem);
+
 public static class PipeClient
 {
+    public const string Unreachable = "Service unreachable — is SteamTimer running?";
+    public const string NoReply = "The service closed the connection without replying.";
+    public const string Unreadable = "The service's reply could not be read — reinstall so the app and service match.";
+
     private static readonly JsonSerializerOptions Opts = new() { PropertyNameCaseInsensitive = true };
 
-    public static async Task<PipeResponse?> SendAsync(PipeRequest req, int timeoutMs = 3000)
+    public static async Task<PipeReply> SendAsync(PipeRequest req, int timeoutMs = 3000)
     {
+        string? line;
         try
         {
             using var timeout = new CancellationTokenSource(timeoutMs);
@@ -18,16 +26,19 @@ public static class PipeClient
             using var writer = new StreamWriter(client, leaveOpen: true) { AutoFlush = true };
             using var reader = new StreamReader(client, leaveOpen: true);
             await writer.WriteLineAsync(JsonSerializer.Serialize(req).AsMemory(), timeout.Token).ConfigureAwait(false);
-            string? line = await reader.ReadLineAsync(timeout.Token).ConfigureAwait(false);
-            if (string.IsNullOrWhiteSpace(line)) return null;
-            return JsonSerializer.Deserialize<PipeResponse>(line, Opts);
+            line = await reader.ReadLineAsync(timeout.Token).ConfigureAwait(false);
         }
-        catch { return null; }
+        catch (Exception)
+        {
+            // Connect, write, read or timeout failures: the transport is down.
+            return new(null, Unreachable);
+        }
+        if (string.IsNullOrWhiteSpace(line)) return new(null, NoReply);
+        try
+        {
+            var response = JsonSerializer.Deserialize<PipeResponse>(line, Opts);
+            return response is null ? new(null, Unreadable) : new(response, "");
+        }
+        catch (JsonException) { return new(null, Unreadable); }
     }
-
-    // Never block a caller's SynchronizationContext (e.g. the WinForms UI
-    // thread): hop to the pool first. Blocking GetResult on an async method
-    // that captures the UI context is what froze the app on Start.
-    public static PipeResponse? Send(PipeRequest req, int timeoutMs = 3000) =>
-        Task.Run(() => SendAsync(req, timeoutMs)).GetAwaiter().GetResult();
 }

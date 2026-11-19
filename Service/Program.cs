@@ -12,7 +12,8 @@ builder.Services.AddSingleton(_ => new HttpClient { Timeout = TimeSpan.FromSecon
 builder.Services.AddSingleton<IWorkoutCreditSource>(services => workoutSettings.IsConfigured
     ? new LocalWorkoutCreditSource(new WorkoutDataSync(services.GetRequiredService<HttpClient>(),
         workoutSettings.BaseUrl, workoutSettings.ApiToken,
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SteamTimer", "workouts.json")))
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SteamTimer", "workouts.json"),
+        services.GetRequiredService<ILogger<WorkoutDataSync>>()))
     : new NullWorkoutCreditSource());
 builder.Services.AddSingleton<TimerEngine>();
 builder.Services.AddSingleton<PipeServer>();

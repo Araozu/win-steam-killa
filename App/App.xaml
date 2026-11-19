@@ -4,6 +4,21 @@
   <Application.Resources>
     <ResourceDictionary>
       <ResourceDictionary.MergedDictionaries><XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" /></ResourceDictionary.MergedDictionaries>
+      <!-- Progress-bar track and time-of-day fill, per theme ("Default" is dark). -->
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Default">
+          <SolidColorBrush x:Key="TrackBrush" Color="#3A3A3A"/>
+          <SolidColorBrush x:Key="TimeFillBrush" Color="#E6E6E6"/>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Light">
+          <SolidColorBrush x:Key="TrackBrush" Color="#E5E5E5"/>
+          <SolidColorBrush x:Key="TimeFillBrush" Color="#1A1A1A"/>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="HighContrast">
+          <SolidColorBrush x:Key="TrackBrush" Color="{ThemeResource SystemColorGrayTextColor}"/>
+          <SolidColorBrush x:Key="TimeFillBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
       <Style x:Key="Card" TargetType="Border">
         <Setter Property="Background" Value="{ThemeResource SubtleFillColorSecondaryBrush}"/>
         <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}"/>

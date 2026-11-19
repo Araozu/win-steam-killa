@@ -5,26 +5,38 @@ namespace App;
 // No UI dependencies: both freshness and countdowns can be checked without Windows.
 internal sealed class TimerViewState(TimeProvider? clock = null)
 {
+    public const string DefaultProblem = "Service unreachable — is SteamTimer running?";
+
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
     private long _receivedAt;
 
     public PipeResponse? Last { get; private set; }
     public bool ServiceAvailable { get; private set; } = true;
+    public string Problem { get; private set; } = DefaultProblem;
     public double ElapsedSeconds => Last == null ? 0 : Math.Max(0, _clock.GetElapsedTime(_receivedAt).TotalSeconds);
     public bool IsCurrent => ServiceAvailable && Last != null && ElapsedSeconds <= 30;
 
+    // Responses are ordered by the service's sequence number, not its clock, so
+    // a wall-clock correction cannot make fresh responses look old.
     public bool Update(PipeResponse response)
     {
-        if (Last != null && response.ServerNowUtc < Last.ServerNowUtc) return false;
+        if (Last != null && response.Sequence > 0 && response.ServiceInstance == Last.ServiceInstance
+            && response.Sequence <= Last.Sequence)
+            return false;
         Last = response;
         _receivedAt = _clock.GetTimestamp();
         ServiceAvailable = true;
         return true;
     }
 
-    public void MarkUnavailable() => ServiceAvailable = false;
+    public void MarkUnavailable(string? problem = null)
+    {
+        ServiceAvailable = false;
+        Problem = string.IsNullOrWhiteSpace(problem) ? DefaultProblem : problem;
+    }
 
-    public TimerValues Project(DateTime localNow)
+    // policyNow is the current PolicyClock time (UTC-05).
+    public TimerValues Project(DateTime policyNow)
     {
         var r = Last ?? throw new InvalidOperationException("No service snapshot has been received.");
         double elapsed = ElapsedSeconds;
@@ -33,14 +45,14 @@ internal sealed class TimerViewState(TimeProvider? clock = null)
         double remaining = Math.Max(0, r.RemainingSeconds);
         double dotaRemaining = Math.Max(0, r.DotaRemainingSeconds);
         double windowLeft = r.WindowEndsLocal is { } end
-            ? Math.Max(0, (end - localNow).TotalSeconds) : double.PositiveInfinity;
+            ? Math.Max(0, (end - policyNow).TotalSeconds) : double.PositiveInfinity;
         bool accruing = r.Running && !r.InCooldown && !r.OutsidePlayHours && !r.Enforcing;
         if (accruing)
         {
             // Never extrapolate past a known session, daily, or window deadline.
             double played = Math.Min(Math.Min(elapsed, 30), Math.Min(remaining, sessionMax - sessionElapsed));
             if (r.WindowEndsLocal is { } windowEnd)
-                played = Math.Min(played, Math.Max(0, (windowEnd - localNow).TotalSeconds + elapsed));
+                played = Math.Min(played, Math.Max(0, (windowEnd - policyNow).TotalSeconds + elapsed));
             remaining -= played;
             sessionElapsed += played;
             if (r.DotaRunning && !r.DotaEnforcing && !r.DotaForbidden)

@@ -7,7 +7,7 @@ public sealed class WorkoutGatingTests : IDisposable
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "workout-gating-tests-" + Guid.NewGuid());
     private readonly StateStore _store;
     private readonly FakeProcesses _processes = new();
-    private DateTime _now = new DateTime(2026, 11, 14, 12, 0, 0, DateTimeKind.Local).ToUniversalTime(); // Saturday
+    private DateTime _now = PolicyClock.ToUtc(new DateTime(2026, 11, 14, 12, 0, 0)); // Saturday
     private readonly FakeWorkout _workout = new();
     private TimerEngine Engine() => new(NullLogger<TimerEngine>.Instance, _store, () => _now, _processes, _workout);
     private static PipeResponse Status(TimerEngine engine) => engine.Handle(new() { Cmd = "status" });
@@ -18,7 +18,7 @@ public sealed class WorkoutGatingTests : IDisposable
     }
     // Tuesday 21:00 local: weekday inside the evening play window, Dota allowed.
     private void SetTuesdayEvening() =>
-        _now = new DateTime(2026, 11, 17, 21, 0, 0, DateTimeKind.Local).ToUniversalTime();
+        _now = PolicyClock.ToUtc(new DateTime(2026, 11, 17, 21, 0, 0));
     public WorkoutGatingTests() { _store = new StateStore(Path.Combine(_dir, "state.json")); }
     public void Dispose() { if (Directory.Exists(_dir)) Directory.Delete(_dir, true); }
 
@@ -46,7 +46,7 @@ public sealed class WorkoutGatingTests : IDisposable
     {
         SetTuesdayEvening(); // weekday: gated
         var engine = Engine();
-        var week = Limits.WeekStartForLogicalDay(LogicalDay.ForLocal(_now.ToLocalTime()));
+        var week = Limits.WeekStartForLogicalDay(LogicalDay.ForUtc(_now));
         engine.ApplyWorkoutEarned(week, 3600, _now);
         var status = Status(engine);
         Assert.Equal(3600, status.WorkoutDotaEarnedSeconds);
@@ -62,7 +62,7 @@ public sealed class WorkoutGatingTests : IDisposable
     {
         SetTuesdayEvening(); // weekday: gated
         var engine = Engine();
-        var week = Limits.WeekStartForLogicalDay(LogicalDay.ForLocal(_now.ToLocalTime()));
+        var week = Limits.WeekStartForLogicalDay(LogicalDay.ForUtc(_now));
         engine.ApplyWorkoutEarned(week, 3600, _now);
         var borrowed = engine.Handle(new() { Cmd = "borrowdota" });
         Assert.True(borrowed.Ok);
@@ -75,7 +75,7 @@ public sealed class WorkoutGatingTests : IDisposable
     public void WeeklyRolloverClearsEarned()
     {
         var engine = Engine();
-        var week = Limits.WeekStartForLogicalDay(LogicalDay.ForLocal(_now.ToLocalTime()));
+        var week = Limits.WeekStartForLogicalDay(LogicalDay.ForUtc(_now));
         engine.ApplyWorkoutEarned(week, 3600, _now);
         Assert.Equal(3600, Status(engine).WorkoutDotaEarnedSeconds);
         _now = _now.AddDays(2); // Monday: new Dota week (forbidden day, so no Dota processes)
@@ -90,7 +90,7 @@ public sealed class WorkoutGatingTests : IDisposable
     public async Task FailedSyncKeepsCachedEarned()
     {
         var engine = Engine();
-        var week = Limits.WeekStartForLogicalDay(LogicalDay.ForLocal(_now.ToLocalTime()));
+        var week = Limits.WeekStartForLogicalDay(LogicalDay.ForUtc(_now));
         engine.ApplyWorkoutEarned(week, 1800, _now);
         _workout.Throw = true;
         Assert.False(await engine.RefreshWorkoutCreditsAsync());
@@ -171,6 +171,33 @@ public sealed class WorkoutGatingTests : IDisposable
         Assert.Equal(1, _processes.DotaKills);
         engine.ApplyWorkoutEarned(week, 120, _now);
         Assert.Equal(60, Status(engine).DotaRemainingSeconds);
+    }
+
+    [Fact]
+    public void NewWorkoutCreditAndDotaBorrowsWarnAgainBeforeTheNextKill()
+    {
+        SetTuesdayEvening();
+        var engine = Engine();
+        var week = Status(engine).DotaWeekStart;
+        engine.ApplyWorkoutEarned(week, 60, _now);
+        _processes.Playing = _processes.Dota = true;
+        var titles = new List<string>();
+        for (int i = 0; i < 6; i++) { _now = _now.AddSeconds(15); titles.AddRange(engine.Tick(NullLogger.Instance).Select(n => n.Title)); }
+        Assert.Contains("Dota 2 closes in 15 minutes", titles);
+        Assert.Contains("Dota 2 time is up", titles);
+        Assert.True(_store.Load()!.DotaNotified);
+
+        engine.ApplyWorkoutEarned(week, 600, _now); // A new workout arrives.
+        var state = _store.Load()!;
+        Assert.False(state.DotaWarned);
+        Assert.False(state.DotaNotified);
+
+        for (int i = 0; i < 2; i++) { _now = _now.AddSeconds(15); engine.Tick(NullLogger.Instance); }
+        _processes.Dota = true;
+        for (int i = 0; i < 40; i++) { _now = _now.AddSeconds(15); engine.Tick(NullLogger.Instance); }
+        Assert.True(_store.Load()!.DotaNotified);
+        Assert.True(engine.Handle(new() { Cmd = "borrowdota" }).Ok);
+        Assert.False(_store.Load()!.DotaNotified);
     }
 
     [Fact]
