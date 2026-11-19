@@ -1,8 +1,11 @@
+using System.Text.Json.Serialization;
+
 namespace Shared;
 
 public class TimerState
 {
-    public int Version { get; set; } = 7;
+    public const int CurrentVersion = 8;
+    public int Version { get; set; } = CurrentVersion;
     // Logical day "yyyy-MM-dd" (00:00 -> 00:00 UTC-05). Base budget derives
     // from its weekday; effective budget includes carry-in and borrowing.
     public string LogicalDay { get; set; } = "";
@@ -35,23 +38,18 @@ public class TimerState
     public List<string> SeenGames { get; set; } = new();
     // Observed Steam child games (identity log for precise per-game tracking).
     public List<GameRecord> GameHistory { get; set; } = new();
-    // --- Dota 2 weekly budget (resets Monday 00:00 UTC-05) ---
-    // Monday "yyyy-MM-dd" of the current logical week.
+    // Both Dota budgets reset Monday 00:00 UTC-05.
     public string DotaWeekStart { get; set; } = "";
-    public double DotaUsedSeconds { get; set; }
+    public double DotaWeekdayUsedSeconds { get; set; }
+    public double DotaWeekendUsedSeconds { get; set; }
+    public long DotaWeekdayEarnedSeconds { get; set; }
+    public long DotaWeekendEarnedSeconds { get; set; }
     public bool DotaWarned { get; set; }
     public bool DotaNotified { get; set; }
-    // Dota borrow/advance: extra granted this week (sum of per-press gains,
-    // 95% first, -7pp/-8pp/... , 50% floor) and the deduction applied this
-    // week for last week's borrows (last week's count * BorrowCost = 10m each).
-    public int DotaBorrowedSeconds { get; set; }
-    public int DotaBorrowCount { get; set; }
-    public int DotaAdvanceDeductionSeconds { get; set; }
-    // --- workout-gated Dota (v7): cached weekly workout credit.
-    // No free weekday grant: Mon–Fri playable Dota = min(8h cap, earned)
-    // + borrows - deductions; Sat/Sun keep the free 8h grant.
-    // Fail-closed: fresh/offline/unconfigured state has 0 earned => weekday Dota blocked.
-    public int WorkoutDotaEarnedSeconds { get; set; }
+    [JsonPropertyName("DotaUsedSeconds"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public double LegacyDotaUsedSeconds { get; set; }
+    [JsonPropertyName("WorkoutDotaEarnedSeconds"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int LegacyDotaEarnedSeconds { get; set; }
     public DateTime WorkoutLastSyncUtc { get; set; }
     // Once-per-day flag: forbidden-day "no Dota" notification already sent.
     // Resets on day rollover (fresh state each logical day).
@@ -85,13 +83,13 @@ public class GameRecord
 // Pipe messages (one JSON object per connection, newline terminated).
 public class PipeRequest
 {
-    public string Cmd { get; set; } = ""; // "status" | "recheck" | "kill" | "borrow" | "borrowdota"
+    public string Cmd { get; set; } = "";
     public string? WorkoutBaseUrl { get; set; }
     public string? WorkoutApiToken { get; set; }
 }
 
 public sealed record WorkoutSyncStatus(string BaseUrl, bool HasToken, bool Syncing,
-    DateTime LastSuccessUtc, int EarnedSeconds, string? LastResult);
+    DateTime LastSuccessUtc, long EarnedSeconds, string? LastResult);
 
 // Fields named *Local are policy-clock times (UTC-05), not the PC's time zone.
 public class PipeResponse
@@ -134,28 +132,18 @@ public class PipeResponse
     public double CooldownTotalSeconds { get; set; }
     public DateTime CooldownUntilUtc { get; set; }
     public int SessionMaxSeconds { get; set; }
-    // --- Dota 2 weekly budget ---
+    // Active Dota budget and its components.
     public string DotaWeekStart { get; set; } = "";
-    public int DotaBudgetSeconds { get; set; }
+    public double DotaBudgetSeconds { get; set; }
     public double DotaUsedSeconds { get; set; }
     public double DotaRemainingSeconds { get; set; }
     public bool DotaRunning { get; set; }
     public bool DotaEnforcing { get; set; }
     public DateTime DotaResetsLocal { get; set; }
-    // --- Dota borrow/advance (effective = min(8h cap, earned) + borrowed - deduction) ---
-    public int DotaBaseBudgetSeconds { get; set; }
-    public int DotaBorrowedSeconds { get; set; }
-    public int DotaBorrowCount { get; set; }
-    public int DotaAdvanceDeductionSeconds { get; set; }
-    // --- workout-gated Dota (v7): cached earned credit for this week + last sync.
-    public int WorkoutDotaEarnedSeconds { get; set; }
+    public bool DotaWeekendBudget { get; set; }
+    public double DotaCarryoverSeconds { get; set; }
+    public long WorkoutDotaEarnedSeconds { get; set; }
     public DateTime WorkoutLastSyncUtc { get; set; }
-    // True when today's Dota is workout-gated (weekdays); weekends keep the free grant.
-    public bool WorkoutGatesToday { get; set; }
-    // Next press: effectiveness (0.95 first, then -0.07, -0.08, ..., 0.5 floor) + gain seconds.
-    public double NextDotaBorrowEffectiveness { get; set; }
-    public int NextDotaBorrowGainSeconds { get; set; }
-    // True on forbidden days (logical day: Mon / Wed / Fri): Dota 2 forbidden, only Dota killed.
     public bool DotaForbidden { get; set; }
     // --- weekday play windows (Mon–Fri 05:30–06:15 + 20:15–22:00, weekends free) ---
     // True when Steam is currently blocked by the clock (weekday outside windows).

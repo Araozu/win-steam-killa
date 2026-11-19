@@ -17,7 +17,6 @@ public sealed class TrayIcon : IDisposable
     private readonly Func<MainWindow?> _getWindow;
     private readonly ActionGate _gate;
     private readonly ToolStripMenuItem _borrowMenuItem;
-    private readonly ToolStripMenuItem _dotaBorrowMenuItem;
     private bool _polling;
     private bool _disposed;
     private string _shownText = "";
@@ -57,9 +56,6 @@ public sealed class TrayIcon : IDisposable
         _borrowMenuItem = new ToolStripMenuItem(Limits.BorrowButtonText(0));
         _borrowMenuItem.Click += async (_, _) => await BorrowAsync("borrow", "Borrow");
         menu.Items.Add(_borrowMenuItem);
-        _dotaBorrowMenuItem = new ToolStripMenuItem(Limits.DotaBorrowButtonText(0));
-        _dotaBorrowMenuItem.Click += async (_, _) => await BorrowAsync("borrowdota", "Dota borrow");
-        menu.Items.Add(_dotaBorrowMenuItem);
         menu.Items.Add("Exit tray (timer keeps running, popups stop)", null, (_, _) =>
         {
             if (!_gate.TryEnter()) return;
@@ -79,7 +75,7 @@ public sealed class TrayIcon : IDisposable
         });
         _icon.ContextMenuStrip = menu;
         _icon.DoubleClick += (_, _) => _showMain();
-        _gate.Changed += () => { _borrowMenuItem.Enabled = _dotaBorrowMenuItem.Enabled = !_gate.Busy; };
+        _gate.Changed += () => _borrowMenuItem.Enabled = !_gate.Busy;
         _poll.Tick += async (_, _) => await PollAsync();
         _poll.Start();
         _ = PollAsync();
@@ -137,7 +133,6 @@ public sealed class TrayIcon : IDisposable
     private void UpdateMenu(PipeResponse resp)
     {
         try { _borrowMenuItem.Text = Limits.BorrowButtonText(resp.BorrowCount); } catch { }
-        try { _dotaBorrowMenuItem.Text = Limits.DotaBorrowButtonText(resp.DotaBorrowCount); } catch { }
     }
 
     private void Notify(PipeResponse resp)
@@ -151,7 +146,7 @@ public sealed class TrayIcon : IDisposable
         }
         string budgetKey = resp.LogicalDay + "|" + resp.BudgetSeconds;
         if (budgetKey != _seenBudgetKey) { _seenBudgetKey = budgetKey; _warned = false; _enforceTold = false; }
-        string dotaKey = resp.DotaWeekStart + "|" + resp.DotaBudgetSeconds;
+        string dotaKey = resp.DotaWeekStart + "|" + resp.DotaWeekendBudget + "|" + resp.DotaBudgetSeconds;
         if (dotaKey != _seenDotaKey) { _seenDotaKey = dotaKey; _dotaWarned = false; _dotaTold = false; }
         if (resp.LogicalDay != _seenForbiddenDay) { _seenForbiddenDay = resp.LogicalDay; _forbiddenTold = false; }
 
@@ -189,11 +184,12 @@ public sealed class TrayIcon : IDisposable
         }
         if (_wasCooldown) { _wasCooldown = false; Balloon("Cooldown over", "You can play again."); }
 
-        bool sessionEnding = resp.Running && resp.SessionRemainingSeconds < resp.RemainingSeconds &&
+        bool playing = resp.Running && resp.SteamRunning;
+        bool sessionEnding = playing && resp.SessionRemainingSeconds < resp.RemainingSeconds &&
             resp.SessionRemainingSeconds <= Limits.WarnBefore.TotalSeconds && resp.SessionRemainingSeconds > 0;
         bool dotaLow = resp.DotaRunning && !resp.DotaForbidden && !resp.DotaEnforcing &&
             resp.DotaRemainingSeconds <= Limits.WarnBefore.TotalSeconds && resp.DotaRemainingSeconds > 0;
-        if (resp.Running && resp.RemainingSeconds <= Limits.WarnBefore.TotalSeconds && !_warned)
+        if (playing && resp.RemainingSeconds <= Limits.WarnBefore.TotalSeconds && !_warned)
         {
             _warned = true;
             Balloon("Steam closes in 15 minutes", $"{TimeText.Hm(resp.RemainingSeconds)} of today's budget left. Save your game.");
@@ -206,7 +202,7 @@ public sealed class TrayIcon : IDisposable
         }
         else { _seenSessionKey = null; _sessionWarned = false; }
         // Weekday play window: warn when it is the first limit to end play.
-        if (resp.Running && resp.WindowEndsLocal is { } windowEnd)
+        if (playing && resp.WindowEndsLocal is { } windowEnd)
         {
             double windowLeft = (windowEnd - serverNow).TotalSeconds;
             string key = windowEnd.ToString("yyyy-MM-dd HH:mm");
@@ -220,23 +216,23 @@ public sealed class TrayIcon : IDisposable
         }
         if (resp.DotaForbidden)
         {
-            if (!_forbiddenTold) { _forbiddenTold = true; Balloon("Dota 2 forbidden on Mon / Wed / Fri", "No Dota today — back tomorrow. Steam + other games continue."); }
+            if (!_forbiddenTold) { _forbiddenTold = true; Balloon("Dota 2 forbidden on Tue / Thu", "No Dota today — back tomorrow. Steam + other games continue."); }
         }
         else if (resp.DotaEnforcing)
         {
             if (!_dotaTold)
             {
                 _dotaTold = true;
-                if (resp.WorkoutGatesToday && resp.DotaBudgetSeconds <= 0)
+                if (!resp.DotaWeekendBudget && resp.DotaBudgetSeconds <= 0)
                     Balloon("Dota 2 needs a workout", "No workout credit this week yet, so weekday Dota is blocked. Other games continue.");
                 else
-                    Balloon("Dota 2 time is up", "This week's Dota allowance is used. Other games continue.");
+                    Balloon("Dota 2 time is up", "The current Dota allowance is used. Other games continue.");
             }
         }
         else if (dotaLow && !_dotaWarned)
         {
             _dotaWarned = true;
-            Balloon("Dota 2 closes in 15 minutes", $"{TimeText.Hm(resp.DotaRemainingSeconds)} of the weekly Dota budget left. Other games are unaffected.");
+            Balloon("Dota 2 closes in 15 minutes", $"{TimeText.Hm(resp.DotaRemainingSeconds)} of the current Dota budget left. Other games are unaffected.");
         }
     }
 

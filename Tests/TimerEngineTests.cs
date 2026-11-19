@@ -135,7 +135,7 @@ public sealed class TimerEngineTests : IDisposable
     public void DotaExhaustionKillsOnlyDota()
     {
         var state = Seed(running: true);
-        state.DotaUsedSeconds = Limits.DotaWeeklyBudget.TotalSeconds - 5;
+        state.DotaWeekendUsedSeconds = Limits.DotaWeekendBase.TotalSeconds - 5;
         _store.Save(state);
         _processes.Playing = _processes.Dota = true;
         var engine = Engine();
@@ -158,17 +158,22 @@ public sealed class TimerEngineTests : IDisposable
         Assert.Equal(0, Status(engine).UsedSeconds);
     }
 
-    [Fact]
-    public void ForbiddenDotaDayDoesNotSpendWeeklyBudget()
+    [Theory]
+    [InlineData(17)] // Tuesday
+    [InlineData(19)] // Thursday
+    public void ForbiddenDotaDayDoesNotSpendWeekdayBudget(int day)
     {
-        _now = PolicyClock.ToUtc(new DateTime(2026, 11, 16, 20, 30, 0));
-        Seed(running: true);
+        _now = PolicyClock.ToUtc(new DateTime(2026, 11, day, 20, 30, 0));
+        var state = Seed(running: true);
+        state.DotaWeekdayEarnedSeconds = 3600;
+        _store.Save(state);
         _processes.Playing = _processes.Dota = true;
         var engine = Engine();
         Tick(engine);
         Assert.Equal(1, _processes.DotaKills);
         Assert.Equal(0, _processes.PlayKills);
         Assert.Equal(0, Status(engine).DotaUsedSeconds);
+        Assert.Equal(3600, Status(engine).DotaRemainingSeconds);
     }
 
     [Fact]
@@ -179,7 +184,7 @@ public sealed class TimerEngineTests : IDisposable
         state.BorrowedSeconds = 1098;
         state.SeenGames.Add("testgame");
         state.GameHistory.Add(new() { Name = "testgame", Path = @"C:\Games\testgame.exe", TotalSeconds = 30 });
-        state.DotaUsedSeconds = 1234;
+        state.DotaWeekendUsedSeconds = 1234;
         _store.Save(state);
         var engine = Engine();
         _now = _now.AddDays(1);
@@ -193,27 +198,63 @@ public sealed class TimerEngineTests : IDisposable
     }
 
     [Fact]
-    public void WeeklyRolloverAppliesDotaDebtAndResetsUsage()
+    public void MondayMidnightExpiresBothDotaBudgets()
     {
+        _now = PolicyClock.ToUtc(new DateTime(2026, 11, 15, 23, 59, 59));
         var state = Seed();
-        state.DotaBorrowCount = 2;
-        state.DotaUsedSeconds = 5000;
+        state.DotaWeekdayEarnedSeconds = 10000;
+        state.DotaWeekdayUsedSeconds = 5000;
+        state.DotaWeekendEarnedSeconds = 600;
+        state.DotaWeekendUsedSeconds = 1000;
         _store.Save(state);
         var engine = Engine();
-        _now = _now.AddDays(2);
-        Tick(engine);
-        Assert.Equal(1200, Status(engine).DotaAdvanceDeductionSeconds);
-        Assert.Equal(0, Status(engine).DotaUsedSeconds);
+        Assert.Equal(19000, Status(engine).DotaRemainingSeconds);
+        _now = _now.AddSeconds(1);
+        var monday = Status(engine);
+        Assert.False(monday.DotaWeekendBudget);
+        Assert.False(monday.DotaForbidden);
+        Assert.Equal(0, monday.DotaBudgetSeconds);
+        Assert.Equal(0, monday.DotaUsedSeconds);
+        Assert.Equal(0, _store.Load()!.DotaWeekendEarnedSeconds);
     }
 
     [Fact]
-    public void BorrowCapsProtectTomorrowAndNextWeek()
+    public void SteamCanBorrowFromTomorrowAndDotaCannotBorrow()
     {
         var engine = Engine();
         for (int i = 0; i < 24; i++) Assert.True(engine.Handle(new() { Cmd = "borrow" }).Ok);
         Assert.False(engine.Handle(new() { Cmd = "borrow" }).Ok);
-        for (int i = 0; i < 48; i++) Assert.True(engine.Handle(new() { Cmd = "borrowdota" }).Ok);
         Assert.False(engine.Handle(new() { Cmd = "borrowdota" }).Ok);
+    }
+
+    [Theory]
+    [InlineData(13, false)]
+    [InlineData(14, true)]
+    public void LegacyDotaUsageMigratesToTheActiveBudget(int day, bool weekend)
+    {
+        _now = PolicyClock.ToUtc(new DateTime(2026, 11, day, 21, 0, 0));
+        var state = Seed(used: 500);
+        state.Version = 7;
+        state.LegacyDotaUsedSeconds = 300;
+        state.LegacyDotaEarnedSeconds = 1800;
+        _store.Save(state);
+        var status = Status(Engine());
+        Assert.Equal(500, status.UsedSeconds);
+        Assert.Equal(300, status.DotaUsedSeconds);
+        Assert.Equal(weekend, status.DotaWeekendBudget);
+        Assert.Equal(TimerState.CurrentVersion, _store.Load()!.Version);
+        Assert.Equal(300, Status(Engine()).DotaUsedSeconds);
+    }
+
+    [Theory]
+    [InlineData("syncthing", true)]
+    [InlineData("ConHost", true)]
+    [InlineData("hardwareupdater", true)]
+    [InlineData("dota2", false)]
+    [InlineData("steam", false)]
+    public void BackgroundProcessesAreExcludedByExactName(string name, bool ignored)
+    {
+        Assert.Equal(ignored, Killer.IsIgnoredPlayProcess(name));
     }
 
     [Theory]

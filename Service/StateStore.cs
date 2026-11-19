@@ -28,12 +28,16 @@ public class StateStore
                 try
                 {
                     var state = JsonSerializer.Deserialize<TimerState>(File.ReadAllText(path));
-                    if (state != null && state.Version != 7) return state; // Engine owns policy migrations.
+                    if (state != null && state.Version != 7 && state.Version != TimerState.CurrentVersion)
+                        return state; // Engine owns policy migrations.
                     if (state != null && LogicalDay.TryParse(state.LogicalDay, out _)
                         && state.SeenGames != null && state.GameHistory != null
                         && double.IsFinite(state.UsedSeconds) && state.UsedSeconds >= 0
                         && double.IsFinite(state.SessionUsedSeconds) && state.SessionUsedSeconds >= 0
-                        && double.IsFinite(state.DotaUsedSeconds) && state.DotaUsedSeconds >= 0)
+                        && double.IsFinite(state.LegacyDotaUsedSeconds) && state.LegacyDotaUsedSeconds >= 0
+                        && double.IsFinite(state.DotaWeekdayUsedSeconds) && state.DotaWeekdayUsedSeconds >= 0
+                        && double.IsFinite(state.DotaWeekendUsedSeconds) && state.DotaWeekendUsedSeconds >= 0
+                        && state.DotaWeekdayEarnedSeconds >= 0 && state.DotaWeekendEarnedSeconds >= 0)
                         return state;
                 }
                 catch (JsonException) { }

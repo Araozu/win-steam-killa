@@ -22,7 +22,7 @@ internal static class TrayStatus
         if (r.InCooldown)
             return ($"Cooldown: {TimeText.Hm(values.CooldownRemaining)} left", TrayLevel.Blocked);
 
-        string text = $"{(r.Running ? "Playing" : "Ready")}: {TimeText.Hm(values.Playable)} left"
+        string text = (values.SessionActive ? $"Playing: {TimeText.Hm(values.Playable)} left" : "Ready")
             + (r.WindowEndsLocal is { } end ? $" • until {end:HH:mm}" : "")
             + (r.DotaForbidden ? " • no Dota today" : r.DotaEnforcing ? " • Dota done" : "");
         var level = values.Playable <= 0 ? TrayLevel.Blocked

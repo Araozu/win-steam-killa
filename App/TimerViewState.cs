@@ -46,7 +46,8 @@ internal sealed class TimerViewState(TimeProvider? clock = null)
         double dotaRemaining = Math.Max(0, r.DotaRemainingSeconds);
         double windowLeft = r.WindowEndsLocal is { } end
             ? Math.Max(0, (end - policyNow).TotalSeconds) : double.PositiveInfinity;
-        bool accruing = r.Running && !r.InCooldown && !r.OutsidePlayHours && !r.Enforcing;
+        bool active = r.Running && r.SteamRunning;
+        bool accruing = active && !r.InCooldown && !r.OutsidePlayHours && !r.Enforcing;
         if (accruing)
         {
             // Never extrapolate past a known session, daily, or window deadline.
@@ -60,16 +61,16 @@ internal sealed class TimerViewState(TimeProvider? clock = null)
         }
 
         // A new session is still limited to SessionMax, even while Steam is stopped.
-        double sessionLeft = r.Running ? sessionMax - sessionElapsed : sessionMax;
+        double sessionLeft = active ? sessionMax - sessionElapsed : sessionMax;
         double playable = Math.Min(Math.Min(sessionLeft, remaining), windowLeft);
-        if (r.DotaRunning)
+        if (active && r.DotaRunning)
             playable = Math.Min(playable, r.DotaEnforcing || r.DotaForbidden ? 0 : dotaRemaining);
         if (r.Enforcing || r.InCooldown || r.OutsidePlayHours) playable = 0;
 
         return new TimerValues(remaining, sessionElapsed, sessionMax, dotaRemaining,
-            Math.Max(0, playable), Math.Max(0, r.CooldownRemainingSeconds - elapsed));
+            Math.Max(0, playable), Math.Max(0, r.CooldownRemainingSeconds - elapsed), active);
     }
 }
 
 internal readonly record struct TimerValues(double Remaining, double SessionElapsed,
-    double SessionMax, double DotaRemaining, double Playable, double CooldownRemaining);
+    double SessionMax, double DotaRemaining, double Playable, double CooldownRemaining, bool SessionActive);

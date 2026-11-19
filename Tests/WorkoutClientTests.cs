@@ -51,13 +51,13 @@ public sealed class WorkoutClientTests
             }));
             var source = new ConfiguredWorkoutCreditSource(reloaded, http, Path.Combine(dir, "workouts.json"),
                 NullLogger<WorkoutDataSync>.Instance);
-            Assert.Equal(0, await source.GetWeeklyEarnedSecondsAsync("2026-11-09", "2026-11-09", default));
+            Assert.Equal(default, await source.GetEarnedAsync("2026-11-09", "2026-11-09", default));
         }
         finally { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
     }
 
     [Fact]
-    public async Task LocalCreditUsesCurrentLogicalWeekAndCapsTheResult()
+    public async Task LocalCreditUsesCurrentLogicalWeekWithNoEightHourCap()
     {
         string dir = Path.Combine(Path.GetTempPath(), "credit-cache-" + Guid.NewGuid());
         try
@@ -84,10 +84,9 @@ public sealed class WorkoutClientTests
 
             var source = new LocalWorkoutCreditSource(new WorkoutDataSync(http, "https://workout.example/base/", "secret", path,
                 clock: Clock));
-            Assert.Equal(2019, await source.GetWeeklyEarnedSecondsAsync("2026-11-09", "2026-11-09", default));
-            Assert.Equal(2026, await source.GetWeeklyEarnedSecondsAsync("2026-11-09", "2026-11-10", default));
-            Assert.Equal((int)Limits.DotaWeeklyBudget.TotalSeconds,
-                await source.GetWeeklyEarnedSecondsAsync("2026-11-09", "2026-11-12", default));
+            Assert.Equal(new(2019, 0), await source.GetEarnedAsync("2026-11-09", "2026-11-09", default));
+            Assert.Equal(new(2026, 0), await source.GetEarnedAsync("2026-11-09", "2026-11-10", default));
+            Assert.Equal(new(37006, 0), await source.GetEarnedAsync("2026-11-09", "2026-11-12", default));
         }
         finally { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
     }
@@ -104,10 +103,42 @@ public sealed class WorkoutClientTests
             Session("separate", start.AddHours(2), 100),
         };
         // (600 + 300) + 100 workout seconds at 3.3x.
-        Assert.Equal(3300, WorkoutCredit.WeeklyDotaSeconds(sessions, "2026-11-09", "2026-11-10"));
+        var archive = new WorkoutArchive { Sessions = sessions.ToDictionary(row => row.Info.Id) };
+        Assert.Equal(new(3300, 0), WorkoutCredit.ForWeek(archive, "2026-11-09", "2026-11-10"));
         // A nested record never earns more than the sessions report.
-        Assert.Equal(1980, WorkoutCredit.WeeklyDotaSeconds([Session("outer", start, 600), Session("inner", start.AddMinutes(1), 60)],
-            "2026-11-09", "2026-11-10"));
+        archive.Sessions.Clear();
+        archive.Sessions["outer"] = Session("outer", start, 600);
+        archive.Sessions["inner"] = Session("inner", start.AddMinutes(1), 60);
+        Assert.Equal(new(1980, 0), WorkoutCredit.ForWeek(archive, "2026-11-09", "2026-11-10"));
+    }
+
+    [Fact]
+    public async Task LateWorkoutsEarnWithinTheSameWeekAndExpireOnMonday()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "workout-cutoff-" + Guid.NewGuid());
+        try
+        {
+            var friday = Session("friday", new(2026, 11, 13, 23, 55, 0), 600);
+            var saturday = Session("saturday", new(2026, 11, 14, 0, 0, 0), 1200);
+            var lateSunday = Session("sunday", new(2026, 11, 15, 12, 0, 0), 600);
+            string path = Path.Combine(dir, "workouts.json");
+            WorkoutSession[] delivered = [friday, saturday];
+            using var http = new HttpClient(new Handler(request =>
+            {
+                if (request.Method == HttpMethod.Post) return new(HttpStatusCode.NoContent);
+                var batch = new WorkoutDataBatch(Clock.GetUtcNow(), delivered, [], [], []);
+                return Json(JsonSerializer.Serialize(new[] { new WorkoutDelivery(Guid.NewGuid().ToString("N"), batch) },
+                    WorkoutDataSync.Json));
+            }));
+            var source = new LocalWorkoutCreditSource(new WorkoutDataSync(http, "https://example.com", "secret", path, clock: Clock));
+            // Friday's first sync happens on Saturday. Five minutes of overlap
+            // earn credit once, in the weekday budget.
+            Assert.Equal(new(1980, 2970), await source.GetEarnedAsync("2026-11-09", "2026-11-14", default));
+            delivered = [lateSunday];
+            Assert.Equal(default, await source.GetEarnedAsync("2026-11-16", "2026-11-16", default));
+            Assert.Contains("sunday", WorkoutArchive.Load(path).Sessions.Keys);
+        }
+        finally { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
     }
 
     [Fact]
@@ -161,7 +192,7 @@ public sealed class WorkoutClientTests
     {
         using var http = new HttpClient(new Handler(_ => Json("{}")));
         var source = new LocalWorkoutCreditSource(new WorkoutDataSync(http, "https://example.com", "secret", "unused.json"));
-        await Assert.ThrowsAsync<JsonException>(() => source.GetWeeklyEarnedSecondsAsync("2026-11-09", "2026-11-09", default));
+        await Assert.ThrowsAsync<JsonException>(() => source.GetEarnedAsync("2026-11-09", "2026-11-09", default));
     }
 
     [Fact]
@@ -175,10 +206,10 @@ public sealed class WorkoutClientTests
             var engine = new TimerEngine(NullLogger<TimerEngine>.Instance, new StateStore(Path.Combine(dir, "state.json")),
                 () => now, workout: new LocalWorkoutCreditSource(new WorkoutDataSync(http, "https://example.com", "secret",
                     Path.Combine(dir, "workouts.json"))));
-            engine.ApplyWorkoutEarned("2026-11-09", 1800, now);
+            engine.ApplyWorkoutEarned("2026-11-09", new(1800, 0), now);
             Assert.False(await engine.RefreshWorkoutCreditsAsync());
             // Read persisted state without querying real processes.
-            Assert.Equal(1800, new StateStore(Path.Combine(dir, "state.json")).Load()!.WorkoutDotaEarnedSeconds);
+            Assert.Equal(1800, new StateStore(Path.Combine(dir, "state.json")).Load()!.DotaWeekdayEarnedSeconds);
         }
         finally { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
     }

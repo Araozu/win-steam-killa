@@ -66,16 +66,17 @@ remaining captures and diagnostics older than one calendar month.
 
 ## Dota 2 credit on the PC
 
-SteamTimer adds up the workout sessions that started in the current logical
-week through today, using the fixed UTC-05 clock and the 00:00 reset. Records
-are deduplicated by Health Connect ID. Sessions whose times overlap (for
-example, one workout saved twice under different IDs) count their shared
-time once: each overlapping group earns its combined span, but never more
-than the durations its sessions report. It multiplies the total by **3.3**,
-rounds down to a whole second, and applies the existing 8-hour weekly cap. The workout session alone
-qualifies, including its recorded warm-up time. Heart rate remains available
-in the archive for inspection. The 612-second sample earns 2,019 seconds
-(33 min 39 sec) before any play restrictions or usage deductions.
+SteamTimer counts deduplicated workouts that started in the current UTC-05
+week, from Monday at 00:00 through the current day. Workouts must be synced
+before the next Monday reset to earn credit. The start day determines the
+budget, so a Friday workout synced on Saturday adds to the weekend through
+weekday carryover. A Sunday workout first synced on Monday stays in the
+archive and earns no credit.
+
+Each budget receives 3.3 times its eligible workout seconds, rounded down to
+a whole second, with no credit cap. Overlapping workouts count their shared
+time once. The 612-second sample earns 2,019 seconds (33 min 39 sec). The weekend
+budget includes a 4-hour base plus unused weekday credit and weekend workouts.
 
 ## Capture a workout from Android
 

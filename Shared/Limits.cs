@@ -16,15 +16,8 @@ public static class Limits
     public static readonly TimeSpan CooldownRoundUp = TimeSpan.FromMinutes(5);
     // Max leftover budget carried from one logical day to the next.
     public static readonly TimeSpan MaxCarryover = TimeSpan.FromMinutes(30);
-    // Dota 2 weekly play budget (resets Monday 00:00 UTC-05 with the week).
-    public static readonly TimeSpan DotaWeeklyBudget = TimeSpan.FromHours(8);
-    // Dota 2 is entirely forbidden on these weekdays (logical day).
-    public static readonly HashSet<DayOfWeek> DotaForbiddenDays = new()
-    {
-        DayOfWeek.Monday,
-        DayOfWeek.Wednesday,
-        DayOfWeek.Friday,
-    };
+    public static readonly TimeSpan DotaWeekendBase = TimeSpan.FromHours(4);
+
     // Weekday play windows (policy clock). Mon–Fri Steam may only run
     // inside these ranges; Sat/Sun have no time restriction (budget/cooldown/
     // Dota rules still apply). End is exclusive (22:00 means up to 21:59:59).
@@ -43,13 +36,6 @@ public static class Limits
     public const double BorrowBaseRate = 0.07;
     public const double BorrowRateStep = 0.01;
     public const double BorrowMinEffectiveness = 0.001;
-
-    // Dota weekly borrow: same 10m cost and same decay curve as the daily
-    // borrow (95% first, -7pp, -8pp, -9pp, ...), but floored at 50% instead
-    // of 0.1%. Each press consumes BorrowCost of NEXT week's Dota budget and
-    // grants BorrowCost * effectiveness this week. Repeatable, capped so next
-    // week never drops below zero.
-    public const double DotaBorrowMinEffectiveness = 0.5;
 
     // 1-indexed press number today (1 = first borrow). Never below the floor.
     public static double EffectivenessForBorrowNumber(int n)
@@ -86,29 +72,6 @@ public static class Limits
     public static string BorrowButtonText(int borrowCountSoFar) =>
         $"+10m from tomorrow ({FormatEffectiveness(NextBorrowEffectiveness(borrowCountSoFar))} effective)";
 
-    // 1-indexed press number this week (1 = first Dota borrow). Same decay as
-    // daily borrow, floored at 50%: 95%, 88%, 80%, 71%, 61%, 50%, 50%, ...
-    public static double EffectivenessForDotaBorrowNumber(int n)
-    {
-        if (n < 1) n = 1;
-        double e = BorrowFirstEffectiveness;
-        for (int i = 2; i <= n; i++)
-            e -= BorrowBaseRate + BorrowRateStep * (i - 2);
-        return Math.Max(DotaBorrowMinEffectiveness, e);
-    }
-
-    public static TimeSpan DotaBorrowGainForNumber(int n)
-    {
-        double e = EffectivenessForDotaBorrowNumber(n);
-        int secs = (int)Math.Max(1, Math.Round(BorrowCost.TotalSeconds * e));
-        return TimeSpan.FromSeconds(secs);
-    }
-
-    public static double NextDotaBorrowEffectiveness(int borrowCountSoFar) =>
-        EffectivenessForDotaBorrowNumber(borrowCountSoFar + 1);
-
-    public static string DotaBorrowButtonText(int borrowCountSoFar) =>
-        $"+10m from next week ({FormatEffectiveness(NextDotaBorrowEffectiveness(borrowCountSoFar))} effective)";
     // Day resets at 00:00 on the policy clock (UTC-05).
     public const int ResetHour = 0;
     public const string ResetClockText = "00:00";
@@ -131,7 +94,7 @@ public static class Limits
     public static bool IsDotaForbiddenLogicalDay(string logicalDay)
     {
         if (LogicalDay.TryParse(logicalDay, out var d))
-            return DotaForbiddenDays.Contains(d.DayOfWeek);
+            return d.DayOfWeek is DayOfWeek.Tuesday or DayOfWeek.Thursday;
         return false;
     }
 

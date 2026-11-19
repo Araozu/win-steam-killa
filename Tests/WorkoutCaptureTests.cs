@@ -284,13 +284,13 @@ public sealed class WorkoutCaptureTests : IDisposable
         var engine = new TimerEngine(Microsoft.Extensions.Logging.Abstractions.NullLogger<TimerEngine>.Instance,
             state, () => now, workout: new LocalWorkoutCreditSource(sync));
         Assert.True(await engine.RefreshWorkoutCreditsAsync());
-        Assert.Equal(2019, state.Load()!.WorkoutDotaEarnedSeconds);
+        Assert.Equal(2019, state.Load()!.DotaWeekdayEarnedSeconds);
 
         await Upload("""{"timestamp":"2026-11-18T14:40:00Z","deleted":[{"type":"exercise","id":"workout"}]}""");
         await Upload(prior.BodyText!);
         Assert.True(await engine.RefreshWorkoutCreditsAsync());
         Assert.Empty(WorkoutArchive.Load(archivePath).Sessions);
-        Assert.Equal(0, state.Load()!.WorkoutDotaEarnedSeconds);
+        Assert.Equal(0, state.Load()!.DotaWeekdayEarnedSeconds);
     }
 
     [Fact]

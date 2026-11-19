@@ -17,21 +17,21 @@ public sealed class WorkoutGatingTests : IDisposable
         _now = _now.AddSeconds(seconds);
         engine.Tick(NullLogger.Instance);
     }
-    // Tuesday 21:00 local: weekday inside the evening play window, Dota allowed.
-    private void SetTuesdayEvening() =>
-        _now = PolicyClock.ToUtc(new DateTime(2026, 11, 17, 21, 0, 0));
+    // Wednesday 21:00 local: weekday inside the evening play window, Dota allowed.
+    private void SetWednesdayEvening() =>
+        _now = PolicyClock.ToUtc(new DateTime(2026, 11, 18, 21, 0, 0));
     public WorkoutGatingTests() { _store = new StateStore(Path.Combine(_dir, "state.json")); }
     public void Dispose() { if (Directory.Exists(_dir)) Directory.Delete(_dir, true); }
 
     [Fact]
     public async Task NoEarnedBlocksDotaButNotSteam()
     {
-        SetTuesdayEvening(); // weekday: gated
+        SetWednesdayEvening(); // weekday: gated
         var engine = Engine();
         _processes.Playing = _processes.Dota = true;
         Tick(engine);
         var status = Status(engine);
-        Assert.True(status.WorkoutGatesToday);
+        Assert.False(status.DotaWeekendBudget);
         Assert.True(status.DotaEnforcing);
         Assert.Equal(0, status.WorkoutDotaEarnedSeconds);
         Assert.True(status.Running); // daily Steam session continues
@@ -43,33 +43,19 @@ public sealed class WorkoutGatingTests : IDisposable
     }
 
     [Fact]
-    public void EarnedUnlocksDotaAndCapsAtWeeklyBase()
+    public void EarnedUnlocksDotaWithoutAnEightHourCap()
     {
-        SetTuesdayEvening(); // weekday: gated
+        SetWednesdayEvening(); // weekday: gated
         var engine = Engine();
         var week = Limits.WeekStartForLogicalDay(LogicalDay.ForUtc(_now));
-        engine.ApplyWorkoutEarned(week, 3600, _now);
+        engine.ApplyWorkoutEarned(week, new(3600, 0), _now);
         var status = Status(engine);
         Assert.Equal(3600, status.WorkoutDotaEarnedSeconds);
         Assert.Equal(3600, status.DotaBudgetSeconds);
         Assert.Equal(3600, status.DotaRemainingSeconds);
         Assert.False(status.DotaEnforcing);
-        engine.ApplyWorkoutEarned(week, 100_000, _now);
-        Assert.Equal((int)Limits.DotaWeeklyBudget.TotalSeconds, Status(engine).DotaBudgetSeconds);
-    }
-
-    [Fact]
-    public void BorrowAddsOnTopOfEarned()
-    {
-        SetTuesdayEvening(); // weekday: gated
-        var engine = Engine();
-        var week = Limits.WeekStartForLogicalDay(LogicalDay.ForUtc(_now));
-        engine.ApplyWorkoutEarned(week, 3600, _now);
-        var borrowed = engine.Handle(new() { Cmd = "borrowdota" });
-        Assert.True(borrowed.Ok);
-        Assert.Equal(3600, borrowed.WorkoutDotaEarnedSeconds);
-        Assert.Equal(570, borrowed.DotaBorrowedSeconds); // 95% of 10m first press
-        Assert.Equal(4170, borrowed.DotaBudgetSeconds);
+        engine.ApplyWorkoutEarned(week, new(100_000, 0), _now);
+        Assert.Equal(100_000, Status(engine).DotaBudgetSeconds);
     }
 
     [Fact]
@@ -77,22 +63,23 @@ public sealed class WorkoutGatingTests : IDisposable
     {
         var engine = Engine();
         var week = Limits.WeekStartForLogicalDay(LogicalDay.ForUtc(_now));
-        engine.ApplyWorkoutEarned(week, 3600, _now);
-        Assert.Equal(3600, Status(engine).WorkoutDotaEarnedSeconds);
-        _now = _now.AddDays(2); // Monday: new Dota week (forbidden day, so no Dota processes)
+        engine.ApplyWorkoutEarned(week, new(3600, 0), _now);
+        Assert.Equal(3600, Status(engine).DotaCarryoverSeconds);
+        _now = _now.AddDays(2); // Monday: new Dota week
         Tick(engine);
         var next = Status(engine);
         Assert.Equal(0, next.WorkoutDotaEarnedSeconds);
         Assert.Equal(0, next.DotaUsedSeconds);
-        Assert.Equal(week == next.DotaWeekStart ? 3600 : 0, next.WorkoutDotaEarnedSeconds);
+        Assert.NotEqual(week, next.DotaWeekStart);
     }
 
     [Fact]
     public async Task FailedSyncKeepsCachedEarned()
     {
+        SetWednesdayEvening();
         var engine = Engine();
         var week = Limits.WeekStartForLogicalDay(LogicalDay.ForUtc(_now));
-        engine.ApplyWorkoutEarned(week, 1800, _now);
+        engine.ApplyWorkoutEarned(week, new(1800, 0), _now);
         _workout.Throw = true;
         Assert.False(await engine.RefreshWorkoutCreditsAsync());
         Assert.Equal(1800, Status(engine).WorkoutDotaEarnedSeconds);
@@ -103,11 +90,11 @@ public sealed class WorkoutGatingTests : IDisposable
     }
 
     [Fact]
-    public void WeekendFollowsOldFreeRules()
+    public void WeekendHasFourHourBase()
     {
         var engine = Engine(); // Saturday: free grant, no workout needed
-        Assert.Equal((int)Limits.DotaWeeklyBudget.TotalSeconds, Status(engine).DotaBudgetSeconds);
-        Assert.False(Status(engine).WorkoutGatesToday);
+        Assert.Equal(Limits.DotaWeekendBase.TotalSeconds, Status(engine).DotaBudgetSeconds);
+        Assert.True(Status(engine).DotaWeekendBudget);
         _processes.Playing = _processes.Dota = true;
         Tick(engine);
         var status = Status(engine);
@@ -119,20 +106,57 @@ public sealed class WorkoutGatingTests : IDisposable
     }
 
     [Fact]
+    public void SaturdayRollsOverOnlyUnusedCreditAndWeekendWorkoutsRaiseTheBalance()
+    {
+        _now = PolicyClock.ToUtc(new DateTime(2026, 11, 20, 21, 0, 0)); // Friday
+        var engine = Engine();
+        var week = Status(engine).DotaWeekStart;
+        engine.ApplyWorkoutEarned(week, new(7200, 0), _now);
+        _processes.Playing = _processes.Dota = true;
+        Tick(engine);
+        for (int i = 0; i < 180; i++) Tick(engine);
+        Assert.Equal(2700, Status(engine).DotaUsedSeconds);
+        Assert.Equal(4500, Status(engine).DotaRemainingSeconds);
+
+        _now = PolicyClock.ToUtc(new DateTime(2026, 11, 20, 23, 59, 59));
+        Assert.False(Status(engine).DotaWeekendBudget);
+        _now = _now.AddSeconds(1);
+        var saturday = Status(engine);
+        Assert.True(saturday.DotaWeekendBudget);
+        Assert.Equal(4500, saturday.DotaCarryoverSeconds);
+        Assert.Equal(18900, saturday.DotaBudgetSeconds);
+        Assert.Equal(18900, saturday.DotaRemainingSeconds);
+        Assert.Equal(0, saturday.DotaUsedSeconds);
+
+        Tick(engine);
+        for (int i = 0; i < 240; i++) Tick(engine);
+        engine.ApplyWorkoutEarned(week, new(7200, 3960), _now);
+        var later = Status(engine);
+        Assert.Equal(22860, later.DotaBudgetSeconds);
+        Assert.Equal(19260, later.DotaRemainingSeconds);
+        Assert.Equal(3600, later.DotaUsedSeconds);
+
+        _now = _now.AddDays(1);
+        var sunday = Status(Engine()); // Restart and Sunday do not roll it over a second time.
+        Assert.Equal(later.DotaBudgetSeconds, sunday.DotaBudgetSeconds);
+        Assert.Equal(later.DotaRemainingSeconds, sunday.DotaRemainingSeconds);
+    }
+
+    [Fact]
     public void StaleWeekEarnedIsIgnored()
     {
         var engine = Engine();
-        engine.ApplyWorkoutEarned("2026-11-02", 5000, _now); // old week
-        Assert.Equal(0, Status(engine).WorkoutDotaEarnedSeconds);
+        engine.ApplyWorkoutEarned("2026-11-02", new(5000, 0), _now); // old week
+        Assert.Equal(0, Status(engine).DotaCarryoverSeconds);
     }
 
     [Fact]
     public async Task TimeoutKeepsCreditAndShutdownCancellationPropagates()
     {
-        SetTuesdayEvening();
+        SetWednesdayEvening();
         var engine = Engine();
         var week = Status(engine).DotaWeekStart;
-        engine.ApplyWorkoutEarned(week, 1800, _now);
+        engine.ApplyWorkoutEarned(week, new(1800, 0), _now);
         _workout.Timeout = true;
         Assert.False(await engine.RefreshWorkoutCreditsAsync());
         Assert.Equal(1800, Status(engine).WorkoutDotaEarnedSeconds);
@@ -144,9 +168,10 @@ public sealed class WorkoutGatingTests : IDisposable
     [Fact]
     public async Task UnconfiguredSourceDoesNotEraseCachedCreditOrClaimSuccessfulSync()
     {
+        SetWednesdayEvening();
         var engine = new TimerEngine(NullLogger<TimerEngine>.Instance, _store, () => _now, _processes,
             new NullWorkoutCreditSource());
-        engine.ApplyWorkoutEarned(Status(engine).DotaWeekStart, 1800, _now);
+        engine.ApplyWorkoutEarned(Status(engine).DotaWeekStart, new(1800, 0), _now);
         var lastSync = Status(engine).WorkoutLastSyncUtc;
         _now = _now.AddMinutes(1);
         Assert.False(await engine.RefreshWorkoutCreditsAsync());
@@ -157,30 +182,30 @@ public sealed class WorkoutGatingTests : IDisposable
     [Fact]
     public void ReducedCreditNeverRefundsAlreadyPlayedDotaTime()
     {
-        SetTuesdayEvening();
+        SetWednesdayEvening();
         var engine = Engine();
         var week = Status(engine).DotaWeekStart;
-        engine.ApplyWorkoutEarned(week, 120, _now);
+        engine.ApplyWorkoutEarned(week, new(120, 0), _now);
         _processes.Playing = _processes.Dota = true;
         Tick(engine); // Open session.
         for (int i = 0; i < 4; i++) Tick(engine);
         Assert.Equal(60, Status(engine).DotaUsedSeconds);
-        engine.ApplyWorkoutEarned(week, 30, _now); // Corrected workout below usage.
+        engine.ApplyWorkoutEarned(week, new(30, 0), _now); // Corrected workout below usage.
         Tick(engine);
         Assert.Equal(60, Status(engine).DotaUsedSeconds);
         Assert.True(Status(engine).DotaEnforcing);
         Assert.Equal(1, _processes.DotaKills);
-        engine.ApplyWorkoutEarned(week, 120, _now);
+        engine.ApplyWorkoutEarned(week, new(120, 0), _now);
         Assert.Equal(60, Status(engine).DotaRemainingSeconds);
     }
 
     [Fact]
-    public void NewWorkoutCreditAndDotaBorrowsWarnAgainBeforeTheNextKill()
+    public void NewWorkoutCreditResetsDotaWarnings()
     {
-        SetTuesdayEvening();
+        SetWednesdayEvening();
         var engine = Engine();
         var week = Status(engine).DotaWeekStart;
-        engine.ApplyWorkoutEarned(week, 60, _now);
+        engine.ApplyWorkoutEarned(week, new(60, 0), _now);
         _processes.Playing = _processes.Dota = true;
         var titles = new List<string>();
         for (int i = 0; i < 6; i++) { _now = _now.AddSeconds(15); titles.AddRange(engine.Tick(NullLogger.Instance).Select(n => n.Title)); }
@@ -188,23 +213,17 @@ public sealed class WorkoutGatingTests : IDisposable
         Assert.Contains("Dota 2 time is up", titles);
         Assert.True(_store.Load()!.DotaNotified);
 
-        engine.ApplyWorkoutEarned(week, 600, _now); // A new workout arrives.
+        engine.ApplyWorkoutEarned(week, new(600, 0), _now); // A new workout arrives.
         var state = _store.Load()!;
         Assert.False(state.DotaWarned);
         Assert.False(state.DotaNotified);
 
-        for (int i = 0; i < 2; i++) { _now = _now.AddSeconds(15); engine.Tick(NullLogger.Instance); }
-        _processes.Dota = true;
-        for (int i = 0; i < 40; i++) { _now = _now.AddSeconds(15); engine.Tick(NullLogger.Instance); }
-        Assert.True(_store.Load()!.DotaNotified);
-        Assert.True(engine.Handle(new() { Cmd = "borrowdota" }).Ok);
-        Assert.False(_store.Load()!.DotaNotified);
     }
 
     [Fact]
     public async Task ManualSyncUsesSavedSettingsAndCoalescesRequests()
     {
-        SetTuesdayEvening();
+        SetWednesdayEvening();
         _workout.Pending = new(TaskCreationOptions.RunContinuationsAsynchronously);
         var settings = new WorkoutConnectionStore(Path.Combine(_dir, "connection.json"), new("", ""));
         using var worker = new WorkoutSyncWorker(Engine(), NullLogger<WorkoutSyncWorker>.Instance, settings);
@@ -218,7 +237,7 @@ public sealed class WorkoutGatingTests : IDisposable
             Assert.True(worker.Status().Syncing);
             Assert.Null(worker.RequestSync());
             Assert.NotNull(worker.Save("https://another.example/", "another-token"));
-            _workout.Pending.SetResult(300);
+            _workout.Pending.SetResult(new(300, 0));
 
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             while (worker.Status().Syncing)
@@ -242,7 +261,7 @@ public sealed class WorkoutGatingTests : IDisposable
     [Fact]
     public async Task PendingNetworkSyncDoesNotBlockEnforcementAndCancelsOnShutdown()
     {
-        SetTuesdayEvening();
+        SetWednesdayEvening();
         _workout.Pending = new(TaskCreationOptions.RunContinuationsAsynchronously);
         var engine = Engine();
         var settings = new WorkoutConnectionStore(Path.Combine(_dir, "connection.json"), new("https://workouts.example", "test-token"));
@@ -272,9 +291,9 @@ public sealed class WorkoutGatingTests : IDisposable
         public bool Throw;
         public bool Timeout;
         public int Calls;
-        public TaskCompletionSource<int>? Pending;
+        public TaskCompletionSource<WorkoutCreditTotals>? Pending;
         public TaskCompletionSource Started = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public Task<int> GetWeeklyEarnedSecondsAsync(string weekStart, string today, CancellationToken ct)
+        public Task<WorkoutCreditTotals> GetEarnedAsync(string weekStart, string today, CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
             Interlocked.Increment(ref Calls);
@@ -282,7 +301,7 @@ public sealed class WorkoutGatingTests : IDisposable
             if (Pending is not null) return Pending.Task.WaitAsync(ct);
             if (Timeout) throw new TaskCanceledException("HTTP request timed out");
             if (Throw) throw new HttpRequestException("upstream down");
-            return Task.FromResult(Earned);
+            return Task.FromResult(new WorkoutCreditTotals(Earned, 0));
         }
     }
 

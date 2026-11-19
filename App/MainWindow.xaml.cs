@@ -170,12 +170,6 @@ public partial class MainWindow : Window
         return Math.Max(0, tomorrowBase - r.BorrowCount * Limits.BorrowCost.TotalSeconds);
     }
 
-    private static double NextWeekDotaRemaining(PipeResponse r)
-    {
-        double debt = r.DotaBorrowCount * Limits.BorrowCost.TotalSeconds;
-        return Math.Max(0, Limits.DotaWeeklyBudget.TotalSeconds - debt);
-    }
-
     private void UpdateClosedHoursStripes()
     {
         // An absolute diagonal gradient keeps the stripe spacing constant when resized.
@@ -228,11 +222,6 @@ public partial class MainWindow : Window
             : TomorrowRemaining(r) < Limits.BorrowCost.TotalSeconds ? "Tomorrow has less than 10m left to borrow."
             : $"Spend 10m of tomorrow for +{Limits.FormatGain(Limits.BorrowGainForNumber(r.BorrowCount + 1))} today. Cooldowns still apply.";
         ToolTipService.SetToolTip(BorrowDayBtn, dayReason);
-        NextWeekText.Text = $"Next week: {TimeText.Hm(NextWeekDotaRemaining(r))}";
-        BorrowDotaBtn.IsEnabled = !_gate.Busy && _state.IsCurrent && NextWeekDotaRemaining(r) >= Limits.BorrowCost.TotalSeconds;
-        string dotaReason = NextWeekDotaRemaining(r) < Limits.BorrowCost.TotalSeconds ? "Next week has less than 10m of Dota left to borrow."
-            : $"Spend 10m of next week's Dota budget for +{Limits.FormatGain(Limits.DotaBorrowGainForNumber(r.DotaBorrowCount + 1))} this week.";
-        ToolTipService.SetToolTip(BorrowDotaBtn, dotaReason);
     }
 
     private async Task SyncFromServiceAsync()
@@ -256,7 +245,8 @@ public partial class MainWindow : Window
         ActionText.Text = _lastNote ?? "";
         ActionText.Visibility = string.IsNullOrWhiteSpace(_lastNote) ? Visibility.Collapsed : Visibility.Visible;
         RemainingTime.Visibility = StatusText.Visibility = Visibility.Visible;
-        UnavailableTime.Visibility = Visibility.Collapsed;
+        UnavailableTime.Visibility = ReadyText.Visibility = Visibility.Collapsed;
+        HeadlineLabel.Text = "Timer";
         StatusText.Text = !_state.ServiceAvailable
             ? $"{_state.Problem} Values are last known."
             : _state.Last == null ? "Waiting for the service…"
@@ -269,7 +259,7 @@ public partial class MainWindow : Window
             _todFrac = 0; _sessFrac = 0; _dayFrac = 0; _dotaFrac = 0;
             ApplyFills();
             DetectorText.Text = "Detector: —";
-            BorrowDayBtn.IsEnabled = BorrowDotaBtn.IsEnabled = false;
+            BorrowDayBtn.IsEnabled = false;
             return;
         }
         var r = _state.Last;
@@ -294,9 +284,15 @@ public partial class MainWindow : Window
                 UnavailableTime.Visibility = Visibility.Visible;
                 RemainingTime.Visibility = StatusText.Visibility = Visibility.Collapsed;
             }
+            else if (values.SessionActive)
+            {
+                HeadlineLabel.Text = "Remaining";
+                StatusText.Text = "Playing";
+            }
             else
             {
-                StatusText.Text = r.Running ? "Playing" : "Ready";
+                ReadyText.Visibility = Visibility.Visible;
+                RemainingTime.Visibility = StatusText.Visibility = Visibility.Collapsed;
             }
         }
 
@@ -334,11 +330,12 @@ public partial class MainWindow : Window
         DayMid.Text = TimeText.Hm(remaining);
         DayMax.Text = FmtMax(dailyMax);
 
-        // ---- Dota allowance: depletes ----
-        _dotaFrac = dotaMax > 0 ? (r.DotaForbidden ? 0 : dotaRem) / dotaMax : 0;
-        DotaMid.Text = r.DotaForbidden ? "forbidden" : r.DotaEnforcing && r.WorkoutGatesToday && r.WorkoutDotaEarnedSeconds <= 0
-            ? "needs workout" : TimeText.Hm(dotaRem);
-        DotaMax.Text = FmtMax(dotaMax);
+        bool weekendBudget = r.DotaWeekendBudget;
+        DotaTitle.Text = weekendBudget ? "Dota 2 · Weekend budget" : "Dota 2 · Weekday budget";
+        DotaBlockedText.Visibility = r.DotaForbidden ? Visibility.Visible : Visibility.Collapsed;
+        _dotaFrac = dotaMax > 0 ? dotaRem / dotaMax : 0;
+        DotaMid.Text = $"{FormatDuration(dotaRem)} left";
+        DotaMax.Text = $"{FormatDuration(dotaMax)} total";
 
         ApplyFills();
 
@@ -351,13 +348,10 @@ public partial class MainWindow : Window
             (r.BorrowedSeconds > 0 ? $" + borrow {TimeText.Hm(r.BorrowedSeconds)}" : "") +
             (r.AdvanceDeductionSeconds > 0 ? $" − advance {TimeText.Hm(r.AdvanceDeductionSeconds)}" : "") +
             $"\nUsed {TimeText.Hm(r.UsedSeconds)}, left {TimeText.Hm(remaining)}" +
-            $"\n\nDota {TimeText.Hm(dotaMax)} total\n" + (r.WorkoutGatesToday
-                ? $"Earned {TimeText.Hm(r.WorkoutDotaEarnedSeconds)} via workout (8h cap)"
-                : $"Base {TimeText.Hm(r.DotaBaseBudgetSeconds > 0 ? r.DotaBaseBudgetSeconds : Limits.DotaWeeklyBudget.TotalSeconds)} (weekends free)") +
-            (r.DotaBorrowedSeconds > 0 ? $" + borrow {TimeText.Hm(r.DotaBorrowedSeconds)}" : "") +
-            (r.DotaAdvanceDeductionSeconds > 0 ? $" − advance {TimeText.Hm(r.DotaAdvanceDeductionSeconds)}" : "") +
-            $"\nUsed {TimeText.Hm(r.DotaUsedSeconds)}, left {TimeText.Hm(dotaRem)}" +
-            (r.DotaForbidden ? "\nNo Dota on Mon / Wed / Fri." : "") + hoursLine;
+            $"\n\nDota {FormatDuration(dotaMax)} total\n" +
+            (weekendBudget ? $"Base {TimeText.Hm(Limits.DotaWeekendBase.TotalSeconds)} + carry {FormatDuration(r.DotaCarryoverSeconds)}\n" : "") +
+            $"Earned {FormatDuration(r.WorkoutDotaEarnedSeconds)} from workouts\n" +
+            $"Used {FormatDuration(r.DotaUsedSeconds)}, left {FormatDuration(dotaRem)}" + hoursLine;
         DetectorDetail.Text = "Sees now: " + DescribeSeen(r) + ".\n" +
             (r.RememberedGames.Count > 0 ? "Remembered: " + string.Join(", ", r.RememberedGames) + "." : "Remembered: none.") +
             $"\nLast poll {Math.Max(0, (int)elapsed)}s ago.";
@@ -414,13 +408,6 @@ public partial class MainWindow : Window
             }
             await SendActionAsync("borrow", 15000, "Borrow");
         }
-        finally { _gate.Exit(); }
-    }
-
-    private async void BorrowDota_Click(object sender, RoutedEventArgs e)
-    {
-        if (!_gate.TryEnter()) return;
-        try { await SendActionAsync("borrowdota", 15000, "Dota borrow"); }
         finally { _gate.Exit(); }
     }
 

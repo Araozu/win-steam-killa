@@ -11,19 +11,20 @@
     <TitleBar x:Name="AppTitleBar" Title="Steam Timer"/>
     <ScrollViewer x:Name="Root" Grid.Row="1" VerticalScrollBarVisibility="Auto">
       <StackPanel Margin="10,10,10,12">
-        <Button Content="Workout sync" HorizontalAlignment="Right" Margin="0,0,0,6" Click="WorkoutSync_Click"/>
         <!-- Remaining -->
         <Grid Margin="2,0,2,0">
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*"/>
             <ColumnDefinition Width="Auto"/>
           </Grid.ColumnDefinitions>
-          <TextBlock Text="Remaining:" FontSize="28" VerticalAlignment="Center"/>
+          <TextBlock x:Name="HeadlineLabel" Text="Timer" FontSize="28" VerticalAlignment="Center"/>
           <TextBlock x:Name="RemainingTime" Grid.Column="1" FontFamily="Consolas" FontSize="38" FontWeight="Bold" VerticalAlignment="Center">
             <Run x:Name="RemH" Text="–"/><Run Text="h" FontSize="20" FontWeight="Normal" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/><Run x:Name="RemM" Text="–"/><Run Text="m" FontSize="20" FontWeight="Normal" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/><Run x:Name="RemS" Text="–"/><Run Text="s" FontSize="20" FontWeight="Normal" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
           </TextBlock>
           <TextBlock x:Name="UnavailableTime" Grid.Column="1" FontSize="32" FontWeight="Bold"
                      Foreground="#D92F20" VerticalAlignment="Center" Visibility="Collapsed"/>
+          <TextBlock x:Name="ReadyText" Text="Ready" Grid.Column="1" FontSize="32" FontWeight="Bold"
+                     VerticalAlignment="Center" Visibility="Collapsed"/>
         </Grid>
         <TextBlock x:Name="StatusText" Text="Waiting for the service…" TextWrapping="Wrap" Margin="2,4,2,0"/>
 
@@ -88,7 +89,7 @@
         <!-- Dota -->
         <Border Style="{StaticResource Card}" Margin="0,6,0,0">
           <StackPanel>
-            <TextBlock Text="Weekly Dota 2 budget" Style="{StaticResource CardTitle}"/>
+            <TextBlock x:Name="DotaTitle" Text="Dota 2 budget" Style="{StaticResource CardTitle}"/>
             <Border x:Name="DotaTrack" Height="12" Background="{ThemeResource TrackBrush}" CornerRadius="6">
               <Border x:Name="DotaFill" Height="12" CornerRadius="6" Background="#D92D20" HorizontalAlignment="Left" Width="0"/>
             </Border>
@@ -96,15 +97,8 @@
               <TextBlock x:Name="DotaMid" Text="—" Style="{StaticResource ScaleLabel}" HorizontalAlignment="Center"/>
               <TextBlock x:Name="DotaMax" Text="—" Style="{StaticResource ScaleLabel}" HorizontalAlignment="Right"/>
             </Grid>
-            <Grid Margin="0,4,0,0" ColumnSpacing="8">
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="Auto"/>
-              </Grid.ColumnDefinitions>
-              <TextBlock x:Name="NextWeekText" Text="Next week: —" Opacity="0.7" VerticalAlignment="Center"/>
-              <Button x:Name="BorrowDotaBtn" Grid.Column="1" Content="Borrow 10m" IsEnabled="False"
-                      Padding="10,4" Click="BorrowDota_Click"/>
-            </Grid>
+            <TextBlock x:Name="DotaBlockedText" Text="Dota blocked today" Style="{StaticResource ScaleLabel}"
+                       Margin="0,4,0,0" Visibility="Collapsed"/>
           </StackPanel>
         </Border>
 
@@ -125,6 +119,7 @@
             </StackPanel>
           </Border>
         </Expander>
+        <Button Content="Workout sync" HorizontalAlignment="Right" Margin="0,10,0,0" Click="WorkoutSync_Click"/>
       </StackPanel>
     </ScrollViewer>
     <local:WorkoutSyncView x:Name="WorkoutView" Grid.Row="1" Visibility="Collapsed" BackRequested="WorkoutSync_Back"/>

@@ -26,17 +26,37 @@ public sealed class TimerViewStateTests
     };
 
     [Fact]
-    public void PausedCountdownIncludesTheNewSessionLimit()
+    public void IdleTrayShowsReadyWithoutAProjectedCountdown()
     {
         var view = View(Status());
         Assert.Equal(7200, view.Project(_clock.LocalNow).Playable);
+        Assert.False(view.Project(_clock.LocalNow).SessionActive);
+        Assert.Equal(("Ready", TrayLevel.Normal), TrayStatus.Describe(view, _clock.LocalNow));
+    }
+
+    [Theory]
+    [InlineData(true, false)] // The old session is still recorded, but play stopped.
+    [InlineData(false, true)] // Play was detected, but the service hasn't opened a session.
+    public void ACountdownRequiresBothAnOpenSessionAndDetectedPlay(bool running, bool detected)
+    {
+        var status = Status();
+        status.Running = running;
+        status.SteamRunning = detected;
+        status.SessionElapsedSeconds = 90;
+        var view = View(status);
+        _clock.Advance(10);
+        var values = view.Project(_clock.LocalNow);
+        Assert.False(values.SessionActive);
+        Assert.Equal(status.RemainingSeconds, values.Remaining);
+        Assert.Equal(90, values.SessionElapsed);
+        Assert.Equal(("Ready", TrayLevel.Normal), TrayStatus.Describe(view, _clock.LocalNow));
     }
 
     [Fact]
     public void ActiveDotaLimitsTheHeadlineButOtherGamesKeepTheirDailyAllowance()
     {
         var status = Status();
-        status.Running = status.DotaRunning = true;
+        status.Running = status.SteamRunning = status.DotaRunning = true;
         status.DotaRemainingSeconds = 90;
         var view = View(status);
         _clock.Advance(10);
@@ -54,7 +74,7 @@ public sealed class TimerViewStateTests
     public void BlockedDotaDoesNotAdvertisePlayableDotaTime(bool enforcing, bool forbidden)
     {
         var status = Status();
-        status.Running = status.DotaRunning = true;
+        status.Running = status.SteamRunning = status.DotaRunning = true;
         status.DotaEnforcing = enforcing;
         status.DotaForbidden = forbidden;
         var view = View(status);
@@ -83,7 +103,7 @@ public sealed class TimerViewStateTests
     public void EstimatesStopAtTheFirstSteamDeadline(string limit)
     {
         var status = Status();
-        status.Running = true;
+        status.Running = status.SteamRunning = true;
         status.SessionElapsedSeconds = limit == "session" ? 7195 : 0;
         status.RemainingSeconds = limit == "daily" ? 5 : 14400;
         if (limit == "window") status.WindowEndsLocal = _clock.LocalNow.AddSeconds(5);
@@ -99,7 +119,7 @@ public sealed class TimerViewStateTests
     public void StaleSnapshotsStopEstimatingAndAreNoLongerCurrent()
     {
         var status = Status();
-        status.Running = true;
+        status.Running = status.SteamRunning = true;
         var view = View(status);
         _clock.Advance(31);
         Assert.False(view.IsCurrent);
@@ -167,7 +187,7 @@ public sealed class TimerViewStateTests
     public void TrayUsesThePlayableTimeIncludingTheSessionLimit(double sessionElapsed, bool low)
     {
         var status = Status();
-        status.Running = true;
+        status.Running = status.SteamRunning = true;
         status.SessionElapsedSeconds = sessionElapsed;
         var (text, level) = TrayStatus.Describe(View(status), _clock.LocalNow);
         Assert.Equal(low ? TrayLevel.Low : TrayLevel.Normal, level);
