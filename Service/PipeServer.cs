@@ -12,11 +12,26 @@ public class PipeServer
 {
     private readonly TimerEngine _engine;
     private readonly ILogger<PipeServer> _log;
+    private readonly PipeSecurity _security;
 
-    public PipeServer(TimerEngine engine, ILogger<PipeServer> log)
+    public PipeServer(TimerEngine engine, ILogger<PipeServer> log, IConfiguration configuration)
     {
         _engine = engine;
         _log = log;
+        _security = new PipeSecurity();
+        _security.AddAccessRule(new PipeAccessRule(
+            new SecurityIdentifier(WellKnownSidType.NetworkSid, null),
+            PipeAccessRights.FullControl, AccessControlType.Deny));
+        _security.AddAccessRule(new PipeAccessRule(
+            new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+            PipeAccessRights.FullControl, AccessControlType.Allow));
+        _security.AddAccessRule(new PipeAccessRule(
+            new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null),
+            PipeAccessRights.ReadWrite, AccessControlType.Allow));
+        if (configuration["Pipe:AllowedUserSid"] is { Length: > 0 } sid)
+            _security.AddAccessRule(new PipeAccessRule(
+                new SecurityIdentifier(sid),
+                PipeAccessRights.ReadWrite, AccessControlType.Allow));
     }
 
     public async Task RunAsync(CancellationToken ct)
@@ -29,21 +44,10 @@ public class PipeServer
             NamedPipeServerStream? server = null;
             try
             {
-                // Explicit ACL: the service runs as SYSTEM but the UI runs as
-                // you (non-elevated). Default pipe security would lock you out.
-                var ps = new PipeSecurity();
-                ps.AddAccessRule(new PipeAccessRule(
-                    new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
-                    PipeAccessRights.ReadWrite, AccessControlType.Allow));
-                // Subsequent server instances need CreateNewInstance, which
-                // ReadWrite does not grant to the SYSTEM service account.
-                ps.AddAccessRule(new PipeAccessRule(
-                    new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
-                    PipeAccessRights.FullControl, AccessControlType.Allow));
                 server = NamedPipeServerStreamAcl.Create(
                     Limits.PipeName, PipeDirection.InOut, maxNumberOfServerInstances: 4,
                     PipeTransmissionMode.Message, PipeOptions.Asynchronous,
-                    inBufferSize: 0, outBufferSize: 0, pipeSecurity: ps,
+                    inBufferSize: 0, outBufferSize: 0, pipeSecurity: _security,
                     inheritability: HandleInheritability.None,
                     additionalAccessRights: (PipeAccessRights)0);
                 await server.WaitForConnectionAsync(ct).ConfigureAwait(false);

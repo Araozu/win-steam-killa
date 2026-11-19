@@ -13,6 +13,8 @@ public sealed class WorkoutCaptureTests : IDisposable
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "capture-tests-" + Guid.NewGuid());
     private readonly string? _oldDir = Environment.GetEnvironmentVariable("DATA_DIR");
     private readonly string? _oldToken = Environment.GetEnvironmentVariable("API_TOKEN");
+    private readonly string? _oldCaptureToken = Environment.GetEnvironmentVariable("CAPTURE_API_TOKEN");
+    private readonly string? _oldSyncToken = Environment.GetEnvironmentVariable("SYNC_API_TOKEN");
     private readonly WebApplicationFactory<Program> _factory;
     private readonly HttpClient _client;
 
@@ -20,6 +22,8 @@ public sealed class WorkoutCaptureTests : IDisposable
     {
         Environment.SetEnvironmentVariable("DATA_DIR", _dir);
         Environment.SetEnvironmentVariable("API_TOKEN", "test-secret");
+        Environment.SetEnvironmentVariable("CAPTURE_API_TOKEN", null);
+        Environment.SetEnvironmentVariable("SYNC_API_TOKEN", null);
         _factory = new WebApplicationFactory<Program>();
         _client = _factory.CreateClient();
     }
@@ -45,6 +49,8 @@ public sealed class WorkoutCaptureTests : IDisposable
         _client.Dispose(); _factory.Dispose();
         Environment.SetEnvironmentVariable("DATA_DIR", _oldDir);
         Environment.SetEnvironmentVariable("API_TOKEN", _oldToken);
+        Environment.SetEnvironmentVariable("CAPTURE_API_TOKEN", _oldCaptureToken);
+        Environment.SetEnvironmentVariable("SYNC_API_TOKEN", _oldSyncToken);
         if (Directory.Exists(_dir)) Directory.Delete(_dir, true);
     }
 
@@ -171,6 +177,50 @@ public sealed class WorkoutCaptureTests : IDisposable
         Assert.Equal(HttpStatusCode.BadRequest,
             (await _client.PostAsync("/api/workouts/ack", new StringContent("{not json", Encoding.UTF8, "application/json"))).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await _client.GetAsync("/api/credit")).StatusCode); // Retired endpoint.
+    }
+
+    [Fact]
+    public async Task ScopedTokensOnlyAuthorizeTheirOwnEndpoints()
+    {
+        Environment.SetEnvironmentVariable("CAPTURE_API_TOKEN", "capture-secret");
+        Environment.SetEnvironmentVariable("SYNC_API_TOKEN", "sync-secret");
+        using var factory = new WebApplicationFactory<Program>();
+        using var client = factory.CreateClient();
+
+        client.DefaultRequestHeaders.Authorization = new("Bearer", "capture-secret");
+        var upload = await client.PostAsync("/api/capture/", new StringContent(Workout));
+        Assert.Equal(HttpStatusCode.OK, upload.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/workouts")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized,
+            (await client.PostAsJsonAsync("/api/workouts/ack", new WorkoutAcknowledgement([]))).StatusCode);
+
+        client.DefaultRequestHeaders.Authorization = new("Bearer", "test-secret");
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/workouts")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized,
+            (await client.PostAsync("/api/capture", new StringContent(Workout))).StatusCode);
+
+        client.DefaultRequestHeaders.Authorization = new("Bearer", "sync-secret");
+        Assert.Equal(HttpStatusCode.Unauthorized,
+            (await client.PostAsync("/api/capture/", new StringContent(Workout))).StatusCode);
+        var batch = Assert.Single((await client.GetFromJsonAsync<WorkoutDelivery[]>("/api/workouts"))!);
+        Assert.Equal(HttpStatusCode.NoContent,
+            (await client.PostAsJsonAsync("/api/workouts/ack", new WorkoutAcknowledgement([batch.Id]))).StatusCode);
+    }
+
+    [Fact]
+    public async Task UnreadableCaptureMovesToDiagnosticsAndLaterWorkoutsAreDelivered()
+    {
+        Authorize();
+        await Upload(Workout);
+        var valid = Assert.Single(Files());
+        var corrupt = Path.Combine(_dir, "captures", Guid.NewGuid().ToString("N") + ".json");
+        await File.WriteAllTextAsync(corrupt, "{");
+        File.SetLastWriteTimeUtc(corrupt, File.GetLastWriteTimeUtc(valid).AddMinutes(-1));
+
+        var batch = Assert.Single((await _client.GetFromJsonAsync<WorkoutDelivery[]>("/api/workouts"))!);
+        Assert.Equal(Path.GetFileNameWithoutExtension(valid), batch.Id);
+        Assert.Equal(valid, Assert.Single(Files()));
+        Assert.Equal("{", await File.ReadAllTextAsync(Assert.Single(Diagnostics())));
     }
 
     [Fact]

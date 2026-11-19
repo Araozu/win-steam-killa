@@ -44,7 +44,9 @@ windows and the times shown in the app. The PC's time zone does not matter.
 ## Use (you need nothing about Windows)
 
 1. Install the .NET 10 SDK and .NET 10 Desktop Runtime on Windows.
-2. Open PowerShell **as Administrator**, go to this repository, and run `./Setup/install.ps1`.
+2. Open PowerShell **as Administrator** from the Windows account that will use
+   the tray, go to this repository, and run `./Setup/install.ps1`. The installer
+   grants that account access to the service's named pipe.
 3. Open **Steam Timer** from Start to see budget / session / cooldown / Dota.
    The tray icon quietly shows remaining time. 15 min before the budget,
    session, weekday play window or Dota allowance ends: warning.

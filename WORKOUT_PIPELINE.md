@@ -28,7 +28,7 @@ The original captures are local and Git-ignored.
 ## Local sync and retention
 
 Configure the Windows service with the receiver URL and shared token through
-`Workout:BaseUrl` and `Workout:ApiToken`, or `WORKOUT_BASE_URL` and
+`Workout:BaseUrl` and `Workout:ApiToken` (the receiver's `SYNC_API_TOKEN`), or `WORKOUT_BASE_URL` and
 `WORKOUT_API_TOKEN` in its environment. It polls at startup and every 15 minutes.
 With the default LocalSystem install, the archive is
 `%SystemRoot%\System32\config\systemprofile\AppData\Local\SteamTimer\workouts.json`.
@@ -82,7 +82,7 @@ in the archive for inspection. The 612-second sample earns 2,019 seconds
    **Total calories** if you want those records linked.
    [Android app releases](https://github.com/mcnaveen/health-connect-webhook/releases/latest)
 3. Add a JSON webhook pointing to the receiver's `/api/capture` URL. Set the
-   header name to `Authorization` and the value to `Bearer YOUR_API_TOKEN`.
+   header name to `Authorization` and the value to `Bearer YOUR_CAPTURE_API_TOKEN`.
    Use the receiver's Tailscale address if both devices are on the same tailnet,
    or the HTTPS deployment URL. [Webhook configuration](https://github.com/mcnaveen/health-connect-webhook/blob/main/docs/webhook.md)
 4. Tap **Sync now** and check for HTTP 200 in **Webhook log**. Inspect the saved

@@ -28,12 +28,18 @@ builder.Services.AddSingleton<CaptureStore>();
 builder.Services.AddHostedService<CaptureCleanup>();
 
 var app = builder.Build();
+app.UseRouting();
 
 // Every /api endpoint needs the bearer token. This runs before endpoint
 // parameter binding, so unauthenticated bodies are never read or parsed.
 app.Use(async (context, next) =>
 {
-    if (context.Request.Path.StartsWithSegments("/api") && !Authorized(context.Request, cfg))
+    var endpoint = context.GetEndpoint();
+    var access = endpoint is null
+        ? WorkoutAccess.Sync
+        : endpoint.Metadata.GetMetadata<WorkoutAccessScope>()?.Access;
+    if (context.Request.Path.StartsWithSegments("/api")
+        && (access is null || !Authorized(context.Request, cfg.TokenFor(access.Value))))
     {
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
         context.Response.Headers.WWWAuthenticate = "Bearer";
@@ -63,13 +69,13 @@ app.MapPost("/api/capture", async (HttpRequest req, CaptureStore store) =>
     var capture = await store.SaveAsync(body.ToArray(), req.ContentType, req.Headers.UserAgent.ToString(),
         req.HttpContext.RequestAborted);
     return Results.Ok(new { captured = true, id = capture.Id, receivedAtUtc = capture.ReceivedAtUtc, queued = capture.WorkoutData is not null });
-});
+}).WithMetadata(new WorkoutAccessScope(WorkoutAccess.Capture));
 
 app.MapGet("/api/workouts", async (HttpContext context, CaptureStore store) =>
 {
     context.Response.Headers.CacheControl = "no-store";
     return Results.Ok(await store.GetPendingAsync(context.RequestAborted));
-});
+}).WithMetadata(new WorkoutAccessScope(WorkoutAccess.Sync));
 
 app.MapPost("/api/workouts/ack", (CaptureStore store, WorkoutAcknowledgement ack) =>
 {
@@ -78,16 +84,17 @@ app.MapPost("/api/workouts/ack", (CaptureStore store, WorkoutAcknowledgement ack
         return Results.BadRequest();
     store.Acknowledge(ack.Ids);
     return Results.NoContent();
-});
+}).WithMetadata(new WorkoutAccessScope(WorkoutAccess.Sync));
 
 app.Run();
 return 0;
 
-static bool Authorized(HttpRequest req, CaptureConfig c) => !string.IsNullOrWhiteSpace(c.ApiToken)
+static bool Authorized(HttpRequest req, string token) => !string.IsNullOrWhiteSpace(token)
     && req.Headers.TryGetValue("Authorization", out var h)
     && h.ToString().StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
     && CryptographicOperations.FixedTimeEquals(
         SHA256.HashData(Encoding.UTF8.GetBytes(h.ToString()[7..])),
-        SHA256.HashData(Encoding.UTF8.GetBytes(c.ApiToken)));
+        SHA256.HashData(Encoding.UTF8.GetBytes(token)));
 
+sealed record WorkoutAccessScope(WorkoutAccess Access);
 public partial class Program { }

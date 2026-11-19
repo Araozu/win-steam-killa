@@ -357,7 +357,7 @@ public partial class MainWindow : Window
     private async void Recheck_Click(object sender, RoutedEventArgs e)
     {
         if (!_gate.TryEnter()) return;
-        try { await SendActionAsync("recheck", 3000, "Recheck"); }
+        try { await SendActionAsync("recheck", PipeClient.DefaultReplyTimeoutMs, "Recheck"); }
         finally { _gate.Exit(); }
     }
 

@@ -77,6 +77,12 @@ sealed class CaptureStore
                 capture = await JsonSerializer.DeserializeAsync<RequestCapture>(file, cancellationToken: ct);
             }
             catch (FileNotFoundException) { continue; } // Acknowledged or expired while listing.
+            catch (JsonException)
+            {
+                _log?.LogWarning("Moving unreadable workout capture {Capture} out of the queue.", Path.GetFileName(path));
+                MoveIfPresent(path, _diagnostics);
+                continue;
+            }
             // Captures saved before normalization was stored are parsed here once.
             var batch = capture?.WorkoutData ?? HealthConnectPayload.Read(capture?.BodyText);
             if (capture is not null && batch is not null)

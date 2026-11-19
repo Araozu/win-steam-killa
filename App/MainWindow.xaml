@@ -106,6 +106,8 @@
           </StackPanel>
         </Border>
 
+        <TextBlock x:Name="ActionText" TextWrapping="Wrap" Margin="2,8,2,0" Visibility="Collapsed"/>
+
         <!-- Old controls, hidden in Details -->
         <Expander Header="Details" Margin="0,6,0,0" IsExpanded="False" Opacity="0.7" FontWeight="SemiBold">
           <Border Style="{StaticResource Card}" Margin="0,6,0,0">
@@ -116,7 +118,6 @@
                 <Button x:Name="ForceBtn" Content="Force close Steam + games" Padding="10,5,10,5" Margin="0,0,8,8" Click="Force_Click"/>
                 <Button x:Name="ResetBtn" Content="Reset view" Padding="10,5,10,5" Margin="0,0,0,8" Click="Reset_Click"/>
               </StackPanel>
-              <TextBlock x:Name="ActionText" TextWrapping="Wrap" Margin="0,0,0,4" Visibility="Collapsed"/>
               <TextBlock x:Name="TodayDetail" Text="" FontSize="13" Opacity="0.7" TextWrapping="Wrap" Margin="0,0,0,4"/>
               <TextBlock x:Name="DetectorDetail" Text="" FontSize="13" Opacity="0.7" TextWrapping="Wrap"/>
             </StackPanel>
