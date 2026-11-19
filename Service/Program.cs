@@ -8,17 +8,19 @@ var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
 builder.Services.AddWindowsService(o => o.ServiceName = "SteamTimer");
 // Workout settings apply to the archive sync. Credit is calculated on this PC.
 var workoutSettings = WorkoutConnectionSettings.FromConfiguration(builder.Configuration);
-builder.Services.AddSingleton(_ => new HttpClient { Timeout = TimeSpan.FromSeconds(30) });
-builder.Services.AddSingleton<IWorkoutCreditSource>(services => workoutSettings.IsConfigured
-    ? new LocalWorkoutCreditSource(new WorkoutDataSync(services.GetRequiredService<HttpClient>(),
-        workoutSettings.BaseUrl, workoutSettings.ApiToken,
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SteamTimer", "workouts.json"),
-        services.GetRequiredService<ILogger<WorkoutDataSync>>()))
-    : new NullWorkoutCreditSource());
+string workoutDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SteamTimer");
+builder.Services.AddSingleton(services => new WorkoutConnectionStore(Path.Combine(workoutDirectory, "workout-connection.json"),
+    workoutSettings, services.GetRequiredService<ILogger<WorkoutConnectionStore>>()));
+builder.Services.AddSingleton(_ => new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
+    { Timeout = TimeSpan.FromSeconds(30) });
+builder.Services.AddSingleton<IWorkoutCreditSource>(services => new ConfiguredWorkoutCreditSource(
+    services.GetRequiredService<WorkoutConnectionStore>(), services.GetRequiredService<HttpClient>(),
+    Path.Combine(workoutDirectory, "workouts.json"), services.GetRequiredService<ILogger<WorkoutDataSync>>()));
 builder.Services.AddSingleton<TimerEngine>();
 builder.Services.AddSingleton<PipeServer>();
 builder.Services.AddHostedService<Worker>();
-builder.Services.AddHostedService<WorkoutSyncWorker>();
+builder.Services.AddSingleton<WorkoutSyncWorker>();
+builder.Services.AddHostedService(services => services.GetRequiredService<WorkoutSyncWorker>());
 
 var host = builder.Build();
 host.Run();

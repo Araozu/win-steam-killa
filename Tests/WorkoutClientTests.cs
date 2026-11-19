@@ -26,6 +26,37 @@ public sealed class WorkoutClientTests
     }
 
     [Fact]
+    public async Task SavedConnectionOverridesFallbackAndRequiresANewTokenForANewUrl()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "workout-settings-" + Guid.NewGuid());
+        try
+        {
+            string path = Path.Combine(dir, "connection.json");
+            var fallback = new WorkoutConnectionSettings("https://fallback.example", "fallback-token");
+            var settings = new WorkoutConnectionStore(path, fallback);
+            Assert.Equal(fallback, settings.Current);
+            Assert.NotNull(settings.Save("http://workout.example", "token"));
+            Assert.NotNull(settings.Save("https://workout.example", ""));
+            Assert.NotNull(settings.Save("https://workout.example", "Bearer token"));
+            Assert.Null(settings.Save("https://workout.example/base/", "saved-token"));
+            Assert.Null(settings.Save("https://workout.example/base", ""));
+
+            var reloaded = new WorkoutConnectionStore(path, fallback);
+            Assert.Equal("https://workout.example/base", reloaded.Current.BaseUrl);
+            using var http = new HttpClient(new Handler(request =>
+            {
+                Assert.Equal("https://workout.example/base/api/workouts", request.RequestUri!.AbsoluteUri);
+                Assert.Equal("saved-token", request.Headers.Authorization?.Parameter);
+                return Json("[]");
+            }));
+            var source = new ConfiguredWorkoutCreditSource(reloaded, http, Path.Combine(dir, "workouts.json"),
+                NullLogger<WorkoutDataSync>.Instance);
+            Assert.Equal(0, await source.GetWeeklyEarnedSecondsAsync("2026-11-09", "2026-11-09", default));
+        }
+        finally { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
+    }
+
+    [Fact]
     public async Task LocalCreditUsesCurrentLogicalWeekAndCapsTheResult()
     {
         string dir = Path.Combine(Path.GetTempPath(), "credit-cache-" + Guid.NewGuid());

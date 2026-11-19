@@ -258,7 +258,7 @@ public class TimerEngine
 
     // Fetch the current week's earned credit and apply it. Returns false when
     // unconfigured or the fetch fails (cached value is kept).
-    public async Task<bool> RefreshWorkoutCreditsAsync(CancellationToken ct = default)
+    public async Task<bool> RefreshWorkoutCreditsAsync(CancellationToken ct = default, Action<Exception>? onFailure = null)
     {
         var source = _workout;
         if (source is null or NullWorkoutCreditSource) return false;
@@ -277,10 +277,21 @@ public class TimerEngine
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             _log.LogWarning(ex, "Workout credit sync failed; keeping cached earned value.");
+            onFailure?.Invoke(ex);
             return false;
         }
         ApplyWorkoutEarned(week, earned, _utcNow());
         return true;
+    }
+
+    internal (DateTime LastSuccessUtc, int EarnedSeconds) GetWorkoutCreditStatus()
+    {
+        lock (_lock)
+        {
+            if (_state is null || _state.DotaWeekStart != Limits.WeekStartForLogicalDay(LogicalDay.ForUtc(_utcNow())))
+                return default;
+            return (_state.WorkoutLastSyncUtc, _state.WorkoutDotaEarnedSeconds);
+        }
     }
 
     public PipeResponse Handle(PipeRequest? req)

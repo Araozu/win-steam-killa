@@ -59,11 +59,10 @@ windows and the times shown in the app. The PC's time zone does not matter.
   (`C:\ProgramData\SteamTimer\state.json`), 15s tick, 15m warning, deadline kill,
   60s enforce loop until 00:00. A separate worker syncs workouts at startup and
   every 15 minutes, then calculates credit locally. Failed syncs preserve cached
-  credit. The workout archive keeps 90 days of records and a backup copy. Named pipe `steamtimer` (`status`; the old manual `start` now just
-  answers "tracking is automatic"). Configure with `Workout:BaseUrl` +
-  `Workout:ApiToken` (or `WORKOUT_BASE_URL` / `WORKOUT_API_TOKEN` env visible to
-  the service). Settings are loaded beside the service executable; nonblank
-  structured settings take precedence over these aliases.
+  credit. The workout archive keeps 90 days of records and a backup copy.
+  The app connects over the `steamtimer` named pipe. Open **Workout sync**
+  in the app to configure the receiver and run a sync on demand.
+  [Workout sync setup](WORKOUT_PIPELINE.md#local-sync-and-retention)
 - `App/` — WinUI 3 Fluent window + quiet WinForms tray (`NotifyIcon` tooltip = countdown,
   balloons only for warnings/kill/cooldown/Dota).
 - `Shared/` — `Limits` (2h session max, len-based cooldown, 30m carryover,

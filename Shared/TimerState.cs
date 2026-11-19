@@ -86,13 +86,19 @@ public class GameRecord
 public class PipeRequest
 {
     public string Cmd { get; set; } = ""; // "status" | "recheck" | "kill" | "borrow" | "borrowdota"
+    public string? WorkoutBaseUrl { get; set; }
+    public string? WorkoutApiToken { get; set; }
 }
+
+public sealed record WorkoutSyncStatus(string BaseUrl, bool HasToken, bool Syncing,
+    DateTime LastSuccessUtc, int EarnedSeconds, string? LastResult);
 
 // Fields named *Local are policy-clock times (UTC-05), not the PC's time zone.
 public class PipeResponse
 {
     public bool Ok { get; set; }
     public string Error { get; set; } = "";
+    public WorkoutSyncStatus? WorkoutSync { get; set; }
     // Response order: Sequence increases within one service run. A new
     // ServiceInstance (service restart) starts a new sequence.
     public string ServiceInstance { get; set; } = "";

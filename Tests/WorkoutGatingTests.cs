@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Text.Json;
 using Service;
 using Shared;
 
@@ -201,12 +202,51 @@ public sealed class WorkoutGatingTests : IDisposable
     }
 
     [Fact]
+    public async Task ManualSyncUsesSavedSettingsAndCoalescesRequests()
+    {
+        SetTuesdayEvening();
+        _workout.Pending = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var settings = new WorkoutConnectionStore(Path.Combine(_dir, "connection.json"), new("", ""));
+        using var worker = new WorkoutSyncWorker(Engine(), NullLogger<WorkoutSyncWorker>.Instance, settings);
+        await worker.StartAsync(CancellationToken.None);
+        try
+        {
+            Assert.NotNull(worker.RequestSync());
+            Assert.Null(worker.Save("https://workouts.example/", "test-private-token"));
+            Assert.Null(worker.RequestSync());
+            await _workout.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(worker.Status().Syncing);
+            Assert.Null(worker.RequestSync());
+            Assert.NotNull(worker.Save("https://another.example/", "another-token"));
+            _workout.Pending.SetResult(300);
+
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            while (worker.Status().Syncing)
+                await Task.Delay(10, deadline.Token);
+            var result = worker.Status();
+            Assert.Equal("https://workouts.example", result.BaseUrl);
+            Assert.True(result.HasToken);
+            Assert.Equal(300, result.EarnedSeconds);
+            Assert.Equal(_now, result.LastSuccessUtc);
+            Assert.Equal("Sync complete.", result.LastResult);
+            Assert.Equal(1, _workout.Calls);
+            Assert.DoesNotContain("test-private-token", JsonSerializer.Serialize(result));
+        }
+        finally
+        {
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await worker.StopAsync(deadline.Token);
+        }
+    }
+
+    [Fact]
     public async Task PendingNetworkSyncDoesNotBlockEnforcementAndCancelsOnShutdown()
     {
         SetTuesdayEvening();
         _workout.Pending = new(TaskCreationOptions.RunContinuationsAsynchronously);
         var engine = Engine();
-        using var worker = new WorkoutSyncWorker(engine, NullLogger<WorkoutSyncWorker>.Instance);
+        var settings = new WorkoutConnectionStore(Path.Combine(_dir, "connection.json"), new("https://workouts.example", "test-token"));
+        using var worker = new WorkoutSyncWorker(engine, NullLogger<WorkoutSyncWorker>.Instance, settings);
         await worker.StartAsync(CancellationToken.None);
         try
         {
@@ -231,11 +271,13 @@ public sealed class WorkoutGatingTests : IDisposable
         public int Earned;
         public bool Throw;
         public bool Timeout;
+        public int Calls;
         public TaskCompletionSource<int>? Pending;
         public TaskCompletionSource Started = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task<int> GetWeeklyEarnedSecondsAsync(string weekStart, string today, CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
+            Interlocked.Increment(ref Calls);
             Started.TrySetResult();
             if (Pending is not null) return Pending.Task.WaitAsync(ct);
             if (Timeout) throw new TaskCanceledException("HTTP request timed out");

@@ -24,6 +24,17 @@ internal sealed class LocalWorkoutCreditSource(WorkoutDataSync sync) : IWorkoutC
     }
 }
 
+internal sealed class ConfiguredWorkoutCreditSource(WorkoutConnectionStore settings, HttpClient http,
+    string archivePath, ILogger<WorkoutDataSync> log) : IWorkoutCreditSource
+{
+    public Task<int> GetWeeklyEarnedSecondsAsync(string weekStartLogicalDay, string todayLogicalDay, CancellationToken ct)
+    {
+        var connection = settings.Current;
+        var sync = new WorkoutDataSync(http, connection.BaseUrl, connection.ApiToken, archivePath, log);
+        return new LocalWorkoutCreditSource(sync).GetWeeklyEarnedSecondsAsync(weekStartLogicalDay, todayLogicalDay, ct);
+    }
+}
+
 internal static class WorkoutCredit
 {
     // Sessions started in [weekStart, today] (policy-clock logical days) earn

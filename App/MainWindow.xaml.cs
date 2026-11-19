@@ -56,7 +56,13 @@ public partial class MainWindow : Window
             initialPresenter.PreferredMinimumWidth = Math.Min((int)(460 * dpi), area.Width);
             initialPresenter.PreferredMinimumHeight = Math.Min((int)(360 * dpi), area.Height);
         }
-        AppWindow.Closing += (_, e) => { if (!_allowClose) { e.Cancel = true; AppWindow.Hide(); } };
+        AppWindow.Closing += (_, e) =>
+        {
+            if (_allowClose) return;
+            e.Cancel = true;
+            ShowTimer();
+            AppWindow.Hide();
+        };
     }
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
@@ -86,9 +92,26 @@ public partial class MainWindow : Window
     public void AllowCloseAndDispose()
     {
         _allowClose = true;
+        WorkoutView.CloseScreen();
         _uiTimer.Stop();
         _gate.Changed -= RefreshCountdown;
         Close();
+    }
+
+    private void WorkoutSync_Click(object sender, RoutedEventArgs e)
+    {
+        Root.Visibility = Visibility.Collapsed;
+        WorkoutView.Visibility = Visibility.Visible;
+        WorkoutView.OpenScreen();
+    }
+
+    private void WorkoutSync_Back(object? sender, EventArgs e) => ShowTimer();
+
+    private void ShowTimer()
+    {
+        WorkoutView.CloseScreen();
+        WorkoutView.Visibility = Visibility.Collapsed;
+        Root.Visibility = Visibility.Visible;
     }
 
     public void UpdateFromStatus(PipeResponse resp, bool keepNote = false)

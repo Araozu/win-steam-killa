@@ -27,9 +27,15 @@ The original captures are local and Git-ignored.
 
 ## Local sync and retention
 
-Configure the Windows service with the receiver URL and shared token through
-`Workout:BaseUrl` and `Workout:ApiToken` (the receiver's `SYNC_API_TOKEN`), or `WORKOUT_BASE_URL` and
-`WORKOUT_API_TOKEN` in its environment. It polls at startup and every 15 minutes.
+In Steam Timer, open **Workout sync**, enter the HTTPS receiver URL and its
+sync bearer token, and click **Save settings**. Click **Sync now** to fetch
+pending workouts immediately and check the last successful sync. The service
+saves these settings in its own profile and polls automatically about every
+15 minutes. To rotate a token, enter the replacement and save again.
+
+For a service configured outside the app, `Workout:BaseUrl` and
+`Workout:ApiToken` or their `WORKOUT_BASE_URL` and `WORKOUT_API_TOKEN`
+environment aliases provide defaults until settings are saved in the app.
 With the default LocalSystem install, the archive is
 `%SystemRoot%\System32\config\systemprofile\AppData\Local\SteamTimer\workouts.json`.
 

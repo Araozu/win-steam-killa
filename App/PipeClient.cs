@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using System.Security.Principal;
 using System.Text.Json;
 using Shared;
 
@@ -23,9 +24,20 @@ public static class PipeClient
         string? line;
         try
         {
-            using var client = new NamedPipeClientStream(".", Limits.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+            bool workout = req.Cmd is "workout-status" or "workout-save" or "workout-sync";
+            using var client = workout
+                ? new NamedPipeClientStream(".", Limits.PipeName,
+                    PipeAccessRights.ReadWrite | PipeAccessRights.ReadPermissions | PipeAccessRights.Synchronize,
+                    PipeOptions.Asynchronous, TokenImpersonationLevel.Identification, HandleInheritability.None)
+                : new NamedPipeClientStream(".", Limits.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
             await client.ConnectAsync(3000).ConfigureAwait(false);
             connected = true;
+            if (workout)
+            {
+                var owner = (SecurityIdentifier?)client.GetAccessControl().GetOwner(typeof(SecurityIdentifier));
+                if (owner?.IsWellKnown(WellKnownSidType.LocalSystemSid) != true)
+                    return new(null, "Couldn't verify the Windows service. Update SteamTimer to use workout sync.");
+            }
             // Enforcement can close Dota and Steam in separate four-second passes.
             using var timeout = new CancellationTokenSource(timeoutMs);
             using var writer = new StreamWriter(client, leaveOpen: true) { AutoFlush = true };
