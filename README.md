@@ -43,14 +43,14 @@ windows and the times shown in the app. The PC's time zone does not matter.
 3. Open **Steam Timer** from Start to see budget / session / cooldown / Dota.
    The tray icon quietly shows remaining time. 15 min before the budget,
    session, weekday play window or Dota allowance ends: warning.
-   At deadline: Steam is closed + blocked until 00:00.
+   When a check detects the daily budget is exhausted, Steam is closed and blocked until 00:00.
    Closing the window does NOT stop the timer.
 
 ## How it works
 
 - `Service/` — Windows Service as LocalSystem. Owns state
-  (`C:\ProgramData\SteamTimer\state.json`), 15s tick, 15m warning, deadline kill,
-  60s enforce loop until 00:00. A separate worker syncs workouts at startup and
+  (`C:\ProgramData\SteamTimer\state.json`) and checks and enforces play limits at
+  startup and every minute thereafter. A separate worker syncs workouts at startup and
   every 15 minutes, then calculates credit locally. Failed syncs preserve cached
   credit. The workout archive keeps 90 days of records and a backup copy.
   The app connects over the `steamtimer` named pipe. Open **Workout sync**

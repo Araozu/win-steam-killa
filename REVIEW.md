@@ -86,7 +86,7 @@ Additional client/enforcement fixes from this review:
 - Blank structured workout settings no longer hide environment-variable aliases.
   The host explicitly loads configuration from beside the executable.
 - Workout polling runs in a separate hosted worker; sequential HTTP requests and
-  timeouts cannot pause the 15-second enforcement loop.
+  timeouts cannot pause the enforcement loop.
 - HTTP timeouts and malformed workout feeds preserve cached credit;
   unconfigured sources do not claim a successful sync or overwrite that cache.
   Shutdown cancellation still propagates.

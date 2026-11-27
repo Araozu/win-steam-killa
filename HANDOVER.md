@@ -45,13 +45,12 @@ Self-control grade (user keeps Admin): friction, not fortress.
   advance fields + `TomorrowBaseSeconds` for the cap).
   (`DurationParser.cs` was deleted with the manual-start UI.)
 - `Service/` — .NET 10 Worker, runs as **LocalSystem** (`AddWindowsService`,
-  name `SteamTimer`). `TimerEngine` owns state, `Worker` ticks every 15s,
+  name `SteamTimer`). `TimerEngine` owns state, `Worker` ticks at startup and every minute,
   `Killer` kills by name + descendant-of-Steam tree (Toolhelp32 parent PIDs,
   no NuGet) + Dota-only kill + single-snapshot play/Dota/game-identity view,
   `PipeServer` = JSON-lines over named pipe `steamtimer` (`status`; retired
   `start` answers "tracking is automatic"). State:
-  `C:\ProgramData\SteamTimer\state.json`. Enforce loop: at most one kill pass
-  per 60s after deadline / in cooldown (separate 60s throttle for Dota kills).
+  `C:\ProgramData\SteamTimer\state.json`. Each tick enforces active Steam and Dota restrictions.
   Notes also go to the Windows Event Log (`SteamTimer` source).
 - `App/` — WinForms only (`net10.0-windows`). `TrayContext`
   (ApplicationContext) is the process root: tray icon + tooltip countdown +
@@ -91,7 +90,7 @@ Self-control grade (user keeps Admin): friction, not fortress.
   accrue nothing and Steam launches are killed.
 - Dota detection = any live `dota2` process (name match). Dota accrues the
   weekly budget only while running; Dota kill = `KillDota` (dota roots +
-  children), throttled 60s, until Monday 03:00.
+  children) on each tick until Monday 03:00.
 - `GameHistory` in state logs each seen child exe (name, full path when
   readable, total seconds, last seen; capped at 50) for future precise titles.
 - Old `state.json` (v1/v2) is discarded on load (version check != 3).

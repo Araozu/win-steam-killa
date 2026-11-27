@@ -39,8 +39,9 @@ public sealed class TimerEngineTests : IDisposable
         var engine = Engine();
         engine.Tick(NullLogger.Instance);
         Assert.Equal(120, Status(engine).UsedSeconds);
-        Tick(engine);
-        Assert.Equal(135, Status(engine).UsedSeconds);
+        _now += TimerEngine.CheckInterval + TimeSpan.FromMilliseconds(100);
+        engine.Tick(NullLogger.Instance);
+        Assert.Equal(180.1, Status(engine).UsedSeconds, precision: 3);
     }
 
     [Fact]
@@ -147,7 +148,7 @@ public sealed class TimerEngineTests : IDisposable
     }
 
     [Fact]
-    public void FirstTickEnforcesBlockedHoursWithoutWaitingForNextTick()
+    public void BlockedHoursEnforcedAtStartupAndOnNextTick()
     {
         _now = PolicyClock.ToUtc(new DateTime(2026, 11, 16, 12, 0, 0));
         _processes.Playing = true;
@@ -156,6 +157,11 @@ public sealed class TimerEngineTests : IDisposable
         Assert.Equal(1, _processes.PlayKills);
         Assert.True(Status(engine).OutsidePlayHours);
         Assert.Equal(0, Status(engine).UsedSeconds);
+
+        _processes.Playing = true;
+        _now += TimerEngine.CheckInterval - TimeSpan.FromMilliseconds(100);
+        Assert.Empty(engine.Tick(NullLogger.Instance));
+        Assert.Equal(2, _processes.PlayKills);
     }
 
     [Theory]

@@ -23,8 +23,6 @@ public class TimerEngine
     private readonly IWorkoutCreditSource? _workout;
     private readonly object _lock = new();
     private TimerState? _state;
-    private DateTime _lastEnforceKill = DateTime.MinValue;
-    private DateTime _lastDotaKill = DateTime.MinValue;
     private string _lastWindowNoteKey = "";
     private string _windowWarnKey = "";
     private readonly ILogger<TimerEngine> _log;
@@ -32,12 +30,13 @@ public class TimerEngine
     private readonly string _instance = Guid.NewGuid().ToString("N");
     private long _sequence;
 
-    // Max seconds accrued per tick: covers 15s interval + jitter, but a reboot/service
-    // gap must not burn the budget while we were down.
-    private static readonly TimeSpan MaxTickCredit = TimeSpan.FromSeconds(30);
+    internal static readonly TimeSpan CheckInterval = TimeSpan.FromMinutes(1);
+
+    // Allow for tick jitter while capping how much time a long pause can accrue.
+    private static readonly TimeSpan MaxTickCredit = CheckInterval + TimeSpan.FromSeconds(15);
 
     // Floating-point guard: Used/SessionUsed/DotaUsed are doubles accumulated
-    // from real tick intervals (15.0xx s with jitter), so a 2h session lands on
+    // from real tick intervals with jitter, so a 2h session can land on
     // 7199.999999999997 instead of 7200 and `>= cap` never fires — no kill, no
     // cooldown, counter frozen just below the limit (seen live on 2026-11-15).
     // 1ms early is invisible; a stuck micro-remainder is not.
@@ -178,8 +177,6 @@ public class TimerEngine
         {
             _state = NewDayState(today, nowUtc, _state);
             _store.Save(_state);
-            _lastEnforceKill = DateTime.MinValue;
-            _lastDotaKill = DateTime.MinValue;
             _log.LogInformation("New logical day {Day}, base {Base}s + carry {Carry}s.",
                 today, _state.BaseBudgetSeconds, _state.CarryInSeconds);
         }
@@ -203,7 +200,6 @@ public class TimerEngine
         st.DotaWeekdayUsedSeconds = st.DotaWeekendUsedSeconds = 0;
         st.DotaWeekdayEarnedSeconds = st.DotaWeekendEarnedSeconds = 0;
         st.DotaWarned = st.DotaNotified = false;
-        _lastDotaKill = DateTime.MinValue;
         _store.Save(st);
     }
 
@@ -543,7 +539,7 @@ public class TimerEngine
 
     private static string UntilLocal(DateTime utc) => PolicyClock.FromUtc(utc).ToString("HH:mm");
 
-    // Called every 15s by Worker. Returns notifications to surface.
+    // Worker calls this at startup and then once per check interval.
     public List<(string Title, string Body)> Tick(ILogger log)
     {
         var notes = new List<(string, string)>();
@@ -598,8 +594,7 @@ public class TimerEngine
             bool inCooldown = st.CooldownUntilUtc > nowUtc;
 
             // Weekday play windows (Mon–Fri 05:30–06:15 + 20:15–22:00, weekends free):
-            // outside the windows Steam is blocked, nothing accrues. Kills are
-            // throttled to one pass per 60s; notifications once per block period.
+            // Outside the windows, enforce on each tick and notify once per block period.
             if (!playAllowed)
             {
                 var endedCooldown = EndSession(st, nowUtc);
@@ -607,20 +602,15 @@ public class TimerEngine
                 bool firstInBlock = blockKey != _lastWindowNoteKey;
                 if (playing || dotaRunning)
                 {
-                    if ((nowUtc - _lastEnforceKill) >= TimeSpan.FromMinutes(1))
+                    int n = _processes.KillPlaySet(st.SeenGames, st.GameHistory, log);
+                    _log.LogInformation("Outside play hours, blocked launch killed {N}.", n);
+                    _store.Save(st);
+                    if (firstInBlock)
                     {
-                        int n = _processes.KillPlaySet(st.SeenGames, st.GameHistory, log);
-                        _lastEnforceKill = nowUtc;
-                        _log.LogInformation("Outside play hours, blocked launch killed {N}.", n);
-                        _store.Save(st);
-                        if (firstInBlock)
-                        {
-                            _lastWindowNoteKey = blockKey;
-                            notes.Add(("Outside play hours",
-                                n > 0 ? $"Steam blocked ({Limits.PlayHoursSummary}). Back at {nextAllowedLocal:HH:mm}. Closed {n} process(es)." : $"Steam blocked ({Limits.PlayHoursSummary}). Back at {nextAllowedLocal:HH:mm}."));
-                        }
+                        _lastWindowNoteKey = blockKey;
+                        notes.Add(("Outside play hours",
+                            n > 0 ? $"Steam blocked ({Limits.PlayHoursSummary}). Back at {nextAllowedLocal:HH:mm}. Closed {n} process(es)." : $"Steam blocked ({Limits.PlayHoursSummary}). Back at {nextAllowedLocal:HH:mm}."));
                     }
-                    else _store.Save(st);
                 }
                 else
                 {
@@ -635,18 +625,14 @@ public class TimerEngine
                 return notes;
             }
 
-            // Tue / Thu: Dota 2 forbidden. Kill only Dota (60s throttle),
+            // Tue / Thu: Dota 2 forbidden. Kill only Dota,
             // accrue nothing to the Dota budget, notify once per day.
             // Steam + other games continue normally on the daily budget.
             bool dotaForbidden = Limits.IsDotaForbiddenLogicalDay(today);
             if (dotaForbidden && dotaRunning)
             {
-                if ((nowUtc - _lastDotaKill) >= TimeSpan.FromMinutes(1))
-                {
-                    int n = _processes.KillDota(log);
-                    _lastDotaKill = nowUtc;
-                    _log.LogInformation("Dota forbidden day, killed {N} Dota process(es).", n);
-                }
+                int n = _processes.KillDota(log);
+                _log.LogInformation("Dota forbidden day, killed {N} Dota process(es).", n);
                 if (!st.DotaForbiddenNotified)
                 {
                     st.DotaForbiddenNotified = true;
@@ -662,31 +648,21 @@ public class TimerEngine
             {
                 EndSession(st, nowUtc);
                 _store.Save(st);
-                bool first = !st.KillNotified;
-                if (first || (nowUtc - _lastEnforceKill) >= TimeSpan.FromMinutes(1))
+                string body = "Daily budget used. Steam is already closed. Back after 00:00.";
+                if (playing)
                 {
-                    if (playing)
-                    {
-                        int n = _processes.KillPlaySet(st.SeenGames, st.GameHistory, log);
-                        _lastEnforceKill = nowUtc;
-                        _log.LogInformation("Budget exhausted, enforcing kill: {N}", n);
-                        if (first)
-                        {
-                            st.KillNotified = true;
-                            _store.Save(st);
-                            notes.Add(("Steam time is up",
-                                n > 0 ? $"Daily budget used. Closed {n} Steam process(es). Back after 00:00." : "Daily budget used. Blocked until 00:00."));
-                        }
-                    }
-                    else if (first)
-                    {
-                        _lastEnforceKill = nowUtc;
-                        st.KillNotified = true;
-                        _store.Save(st);
-                        notes.Add(("Steam time is up", "Daily budget used. Steam is already closed. Back after 00:00."));
-                    }
+                    int n = _processes.KillPlaySet(st.SeenGames, st.GameHistory, log);
+                    _log.LogInformation("Budget exhausted, enforcing kill: {N}", n);
+                    body = n > 0
+                        ? $"Daily budget used. Closed {n} Steam process(es). Back after 00:00."
+                        : "Daily budget used. Blocked until 00:00.";
                 }
-                else _store.Save(st);
+                if (!st.KillNotified)
+                {
+                    st.KillNotified = true;
+                    _store.Save(st);
+                    notes.Add(("Steam time is up", body));
+                }
                 return notes;
             }
 
@@ -696,19 +672,14 @@ public class TimerEngine
                 double cdRem = Math.Max(0, (st.CooldownUntilUtc - nowUtc).TotalSeconds);
                 if (playing)
                 {
-                    if ((nowUtc - _lastEnforceKill) >= TimeSpan.FromMinutes(1))
-                    {
-                        int n = _processes.KillPlaySet(st.SeenGames, st.GameHistory, log);
-                        _lastEnforceKill = nowUtc;
-                        st.Running = false;
-                        st.SessionUsedSeconds = 0;
-                        st.SessionWarned = false;
-                        _store.Save(st);
-                        _log.LogInformation("Cooldown active, blocked launch killed {N}.", n);
-                        notes.Add(("Cooldown active",
-                            n > 0 ? $"Steam blocked for {Limits.FormatHm(TimeSpan.FromSeconds(cdRem))} more (until {UntilLocal(st.CooldownUntilUtc)}). Closed {n} process(es)." : $"Steam blocked for {Limits.FormatHm(TimeSpan.FromSeconds(cdRem))} more (until {UntilLocal(st.CooldownUntilUtc)})."));
-                    }
-                    else _store.Save(st);
+                    int n = _processes.KillPlaySet(st.SeenGames, st.GameHistory, log);
+                    st.Running = false;
+                    st.SessionUsedSeconds = 0;
+                    st.SessionWarned = false;
+                    _store.Save(st);
+                    _log.LogInformation("Cooldown active, blocked launch killed {N}.", n);
+                    notes.Add(("Cooldown active",
+                        n > 0 ? $"Steam blocked for {Limits.FormatHm(TimeSpan.FromSeconds(cdRem))} more (until {UntilLocal(st.CooldownUntilUtc)}). Closed {n} process(es)." : $"Steam blocked for {Limits.FormatHm(TimeSpan.FromSeconds(cdRem))} more (until {UntilLocal(st.CooldownUntilUtc)})."));
                 }
                 else
                 {
@@ -824,7 +795,6 @@ public class TimerEngine
                 if (Reached(st.UsedSeconds, effective()))
                 {
                     int n = _processes.KillPlaySet(st.SeenGames, st.GameHistory, log);
-                    _lastEnforceKill = nowUtc;
                     st.KillNotified = true;
                     EndSession(st, nowUtc);
                     _store.Save(st);
@@ -838,10 +808,9 @@ public class TimerEngine
                 if (!dotaForbidden && Reached(DotaUsedOf(st, dotaWeekend), effectiveDota()))
                 {
                     bool first = !st.DotaNotified;
-                    if (dotaRunning && (nowUtc - _lastDotaKill) >= TimeSpan.FromMinutes(1))
+                    if (dotaRunning)
                     {
                         int n = _processes.KillDota(log);
-                        _lastDotaKill = nowUtc;
                         _log.LogInformation("Dota budget hit, killed {N} Dota process(es).", n);
                         if (first)
                         {
@@ -865,7 +834,6 @@ public class TimerEngine
                 if (Reached(st.SessionUsedSeconds, sessionMax))
                 {
                     int n = _processes.KillPlaySet(st.SeenGames, st.GameHistory, log);
-                    _lastEnforceKill = nowUtc;
                     var cd = EndSession(st, nowUtc);
                     _log.LogInformation("Session max reached, killed {N}. Cooldown until {Until}. Budget left: {Left}s.", n, st.CooldownUntilUtc, rem);
                     _store.Save(st);

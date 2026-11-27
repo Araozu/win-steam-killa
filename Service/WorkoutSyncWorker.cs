@@ -4,7 +4,7 @@ using System.Net;
 
 namespace Service;
 
-// Network I/O must never delay the independent 15-second enforcement loop.
+// The enforcement loop runs independently of network I/O.
 internal sealed class WorkoutSyncWorker : BackgroundService
 {
     private readonly TimerEngine _engine;

@@ -20,7 +20,7 @@ internal sealed class Worker : BackgroundService
     {
         _log.LogInformation("SteamTimer service starting.");
         var pipeTask = _pipe.RunAsync(stoppingToken);
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(15));
+        using var timer = new PeriodicTimer(TimerEngine.CheckInterval);
         // Immediate tick on boot so reboot-resume kills fast if past deadline.
         TickOnce();
         try
