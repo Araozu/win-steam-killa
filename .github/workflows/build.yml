@@ -16,15 +16,28 @@ jobs:
             10.0.x
             11.0.x
       - if: runner.os == 'Windows'
-        run: dotnet build SteamTimer.slnx -c Release
+        run: dotnet build windows/SteamTimer.slnx -c Release
       - if: runner.os != 'Windows'
-        run: dotnet build Tests/Tests.csproj -c Release
+        run: dotnet build windows/Tests/Tests.csproj -c Release
       - if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          dotnet publish App/App.csproj -c Release -r win-x64 --self-contained false -o "$env:RUNNER_TEMP/steam-timer-app"
+          dotnet publish windows/App/App.csproj -c Release -r win-x64 --self-contained false -o "$env:RUNNER_TEMP/steam-timer-app"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (-not (Test-Path "$env:RUNNER_TEMP/steam-timer-app/App.pri")) { throw 'Missing App.pri' }
-      - run: dotnet test Tests/Tests.csproj -c Release --no-build
+      - run: dotnet test windows/Tests/Tests.csproj -c Release --no-build
       - shell: pwsh
-        run: ./Tests/VerifySetup.ps1
+        run: ./windows/Tests/VerifySetup.ps1
+
+  linux-rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GTK4 and libadwaita dev libraries
+        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libdbus-1-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check and test Linux Rust workspace
+        working-directory: linux
+        run: |
+          cargo test --workspace
+          cargo build --workspace --release

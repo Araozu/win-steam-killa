@@ -1,0 +1,137 @@
+.headline-label {
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.countdown-label {
+  font-size: 32px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.countdown-unit {
+  font-size: 16px;
+  font-weight: 400;
+  opacity: 0.7;
+}
+
+.unavailable-label {
+  font-size: 28px;
+  font-weight: 700;
+  color: #d92f20;
+}
+
+.ready-label {
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.section-title {
+  font-size: 13px;
+  font-weight: 700;
+  opacity: 0.7;
+  margin-top: 8px;
+  margin-bottom: 2px;
+}
+
+.card-box {
+  background-color: @card_bg_color;
+  border-radius: 12px;
+  padding: 12px 14px;
+  border: 1px solid alpha(@window_fg_color, 0.08);
+}
+
+.card-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.scale-label {
+  font-size: 12px;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+
+.dota-blocked {
+  color: #d92f20;
+  font-weight: 600;
+  opacity: 1;
+}
+
+progressbar.st-bar trough {
+  min-height: 12px;
+  border-radius: 6px;
+  background-color: alpha(@window_fg_color, 0.14);
+}
+
+progressbar.st-bar progress {
+  min-height: 12px;
+  border-radius: 6px;
+}
+
+progressbar.bar-tod progress {
+  background-color: @accent_bg_color;
+}
+
+progressbar.bar-tod-closed trough {
+  background-image: repeating-linear-gradient(
+    45deg,
+    #d92f20,
+    #d92f20 6px,
+    #fbaaa2 6px,
+    #fbaaa2 12px
+  );
+}
+
+progressbar.bar-tod-closed progress {
+  background-color: transparent;
+}
+
+progressbar.bar-session progress {
+  background-color: #7145b8;
+}
+
+progressbar.bar-daily progress {
+  background-color: #1faa53;
+}
+
+progressbar.bar-dota progress {
+  background-color: #d92d20;
+}
+
+.action-note {
+  background-color: alpha(@accent_bg_color, 0.12);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.detail-text {
+  font-size: 12.5px;
+  opacity: 0.8;
+}
+
+button.borrow-heat-0 {
+  /* default button appearance */
+}
+
+button.borrow-heat-1 {
+  background-color: #e6a817;
+  color: #1a1a1a;
+}
+
+button.borrow-heat-2 {
+  background-color: #e67317;
+  color: #ffffff;
+}
+
+button.borrow-heat-3 {
+  background-color: #d94820;
+  color: #ffffff;
+}
+
+button.borrow-heat-4 {
+  background-color: #c01c28;
+  color: #ffffff;
+}

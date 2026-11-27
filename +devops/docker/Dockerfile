@@ -1,10 +1,10 @@
 FROM mcr.microsoft.com/dotnet/sdk:11.0 AS build
 WORKDIR /src
 COPY WorkoutService/WorkoutService.csproj ./WorkoutService/
-COPY Shared/Shared.csproj ./Shared/
+COPY windows/Shared/Shared.csproj ./windows/Shared/
 RUN dotnet restore ./WorkoutService/WorkoutService.csproj
 COPY WorkoutService/ ./WorkoutService/
-COPY Shared/ ./Shared/
+COPY windows/Shared/ ./windows/Shared/
 RUN dotnet publish ./WorkoutService/WorkoutService.csproj -c Release -o /app --no-restore
 
 FROM mcr.microsoft.com/dotnet/aspnet:11.0

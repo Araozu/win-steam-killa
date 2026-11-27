@@ -22,6 +22,10 @@
 # Mono auto generated files
 mono_crash.*
 
+# Rust / Linux build artifacts
+/linux/target/
+*.rs.bk
+
 # Build results
 [Dd]ebug/
 [Dd]ebugPublic/

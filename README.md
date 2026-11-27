@@ -7,7 +7,7 @@ After the budget is used, kills Steam + games and keeps enforcing until 00:00.
 Every rule runs on a fixed **UTC-05** clock: day and week resets, play
 windows and the times shown in the app. The PC's time zone does not matter.
 
-## Rules (hard-coded in `Shared/Limits.cs`, info-only in the UI)
+## Rules (hard-coded in `windows/Shared/Limits.cs` and `linux/crates/core/src/limits.rs`, info-only in the UI)
 
 - **Daily budget:** Mon–Fri **1h30m**, Sat **2h30m**, Sun **4h**.
   Up to **30m** of unused budget carries over to the next day.
@@ -34,11 +34,19 @@ windows and the times shown in the app. The PC's time zone does not matter.
   Outside those windows Steam + games are closed/blocked and nothing accrues.
   **Sat/Sun have no time restriction** (budget/cooldown/Dota rules still apply).
 
-## Use (you need nothing about Windows)
+## Use (Linux — Rust + GTK4 / libadwaita)
+
+1. Ensure Rust, `gtk4`, and `libadwaita` are installed (already present on Arch/EndeavourOS with GNOME/GTK apps).
+2. Run `./linux/setup/install.sh` from the repository root. It builds release binaries, creates the `steamtimer` group, adds your user to it, installs `steamtimerd` as a root `systemd` service with a 5-minute watchdog timer, and installs desktop/autostart entries.
+3. Log out and back in (or run `newgrp steamtimer`) once so your user can access `/run/steamtimer/steamtimer.sock`.
+4. Launch **Steam Timer** (`steamtimer`) or add `exec steamtimer --hidden` to your Sway config for login notifications/tray. You can also run `steamtimer status --waybar` for a Waybar custom module.
+5. Uninstall with `./linux/setup/uninstall.sh`; usage history in `/var/lib/steamtimer` is retained.
+
+## Use (Windows)
 
 1. Install the .NET 10 SDK and .NET 10 Desktop Runtime on Windows.
 2. Open PowerShell **as Administrator** from the Windows account that will use
-   the tray, go to this repository, and run `./Setup/install.ps1`. The installer
+   the tray, go to this repository, and run `./windows/Setup/install.ps1`. The installer
    grants that account access to the service's named pipe.
 3. Open **Steam Timer** from Start to see budget / session / cooldown / Dota.
    The tray icon quietly shows remaining time. 15 min before the budget,
@@ -48,7 +56,8 @@ windows and the times shown in the app. The PC's time zone does not matter.
 
 ## How it works
 
-- `Service/` — Windows Service as LocalSystem. Owns state
+- `linux/` — Rust workspace (`steamtimer-core`, `steamtimerd` systemd root daemon over `/run/steamtimer/steamtimer.sock` with `/proc` + Flatpak cgroup detection/enforcement, and `steamtimer` GTK4/libadwaita GUI + D-Bus notifications + StatusNotifierItem tray + CLI).
+- `windows/Service/` — Windows Service as LocalSystem. Owns state
   (`C:\ProgramData\SteamTimer\state.json`) and checks and enforces play limits at
   startup and every minute thereafter. A separate worker syncs workouts at startup and
   every 15 minutes, then calculates credit locally. Failed syncs preserve cached
@@ -56,24 +65,33 @@ windows and the times shown in the app. The PC's time zone does not matter.
   The app connects over the `steamtimer` named pipe. Open **Workout sync**
   in the app to configure the receiver and run a sync on demand.
   [Workout sync setup](WORKOUT_PIPELINE.md#local-sync-and-retention)
-- `App/` — WinUI 3 Fluent window + quiet WinForms tray (`NotifyIcon` tooltip = countdown,
+- `windows/App/` — WinUI 3 Fluent window + quiet WinForms tray (`NotifyIcon` tooltip = countdown,
   balloons only for warnings/kill/cooldown/Dota).
-- `Shared/` — `Limits` (2h session max, len-based cooldown, 30m carryover,
+- `windows/Shared/` — `Limits` (2h session max, len-based cooldown, 30m carryover,
   weekday and weekend Dota budgets), `PolicyClock` (fixed UTC-05),
   `LogicalDay` (00:00 reset), pipe DTOs.
 
 ## Dev
 
+Linux (Rust):
+
+```sh
+cd linux
+cargo test --workspace
+cargo build --workspace --release
+```
+
+Windows (.NET):
 Install .NET 11 SDK to build the complete solution (WorkoutService targets .NET 11;
 App/Service/Shared target .NET 10). The WinUI app requires Windows to build and run. The service also requires Windows to run.
 
 ```sh
-dotnet build SteamTimer.slnx -c Release
-dotnet test Tests/Tests.csproj -c Release --no-build
-pwsh -NoProfile -File Tests/VerifySetup.ps1
+dotnet build windows/SteamTimer.slnx -c Release
+dotnet test windows/Tests/Tests.csproj -c Release --no-build
+pwsh -NoProfile -File windows/Tests/VerifySetup.ps1
 ```
 
-On Linux or macOS, build `Tests/Tests.csproj` instead of the full solution before running the tests. The WinUI app uses the self-contained Windows App SDK and targets Windows 10 version 1809 or later.
+On Linux or macOS, build `windows/Tests/Tests.csproj` instead of the full solution before running the tests. The WinUI app uses the self-contained Windows App SDK and targets Windows 10 version 1809 or later.
 
 The tests run the production timer engine with a simulated clock/process list,
 and exercise raw capture, authorization, credit-client failures and caching. CI runs
@@ -95,6 +113,6 @@ week. Fresh state starts at zero.
   Dota lockouts kill only `dota2` processes.
 - The service logs observed Steam child games (exe name + path + time) in
   state for future precise per-game tracking.
-- Uninstall with `Setup/uninstall.ps1` as admin; usage history is retained.
+- Uninstall on Windows with `windows/Setup/uninstall.ps1` as admin (or `./linux/setup/uninstall.sh` on Linux); usage history is retained.
 - State writes retain a backup. A corrupt primary is recovered from that backup;
   if both are invalid, service startup fails instead of silently clearing usage.

@@ -12,7 +12,7 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.1" PrivateAssets="all" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="11.0.0" />
     <ProjectReference Include="../Shared/Shared.csproj" />
-    <ProjectReference Include="../WorkoutService/WorkoutService.csproj" />
+    <ProjectReference Include="../../WorkoutService/WorkoutService.csproj" />
     <!-- Exercise the production engine on Linux without starting Windows services. -->
     <Compile Include="../Service/TimerEngine.cs" Link="Service/TimerEngine.cs" />
     <Compile Include="../Service/StateStore.cs" Link="Service/StateStore.cs" />

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Steam Timer
+Comment=Self-control Steam & Dota 2 time limiter
+Exec=/usr/local/bin/steamtimer
+Icon=security-high-symbolic
+Terminal=false
+Categories=Utility;
+StartupNotify=true

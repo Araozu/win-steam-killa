@@ -1,0 +1,23 @@
+[package]
+name = "steamtimer-gui"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "steamtimer"
+path = "src/main.rs"
+
+[dependencies]
+steamtimer-core.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+gtk4.workspace = true
+libadwaita.workspace = true
+notify-rust.workspace = true
+ksni.workspace = true
+async-channel.workspace = true

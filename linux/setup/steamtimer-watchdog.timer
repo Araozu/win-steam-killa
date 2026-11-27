@@ -1,0 +1,10 @@
+[Unit]
+Description=Check every 5 minutes that steamtimerd is running
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=steamtimer-watchdog.service
+
+[Install]
+WantedBy=timers.target

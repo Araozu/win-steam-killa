@@ -1,0 +1,27 @@
+[Unit]
+Description=SteamTimer — self-control Steam limiter daemon
+After=local-fs.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+EnvironmentFile=-/etc/steamtimer/env
+RuntimeDirectory=steamtimer
+RuntimeDirectoryMode=0755
+StateDirectory=steamtimer
+StateDirectoryMode=0700
+ExecStart=/usr/local/bin/steamtimerd \
+    --socket /run/steamtimer/steamtimer.sock \
+    --state-file /var/lib/steamtimer/state.json \
+    --workout-archive /var/lib/steamtimer/workouts.json \
+    --workout-config /var/lib/steamtimer/workout-connection.json \
+    --socket-group steamtimer \
+    --socket-mode 0660
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

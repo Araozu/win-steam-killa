@@ -1,0 +1,6 @@
+[Unit]
+Description=Restart SteamTimer daemon if stopped
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'systemctl is-active --quiet steamtimerd.service || systemctl start steamtimerd.service'

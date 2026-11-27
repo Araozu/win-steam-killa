@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Steam Timer (background notifier)
+Comment=Keep Steam Timer notifications and tray icon running
+Exec=/usr/local/bin/steamtimer --hidden
+Icon=security-high-symbolic
+Terminal=false
+X-GNOME-Autostart-enabled=true
